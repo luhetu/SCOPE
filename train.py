@@ -7,30 +7,26 @@ from tasks import build_task
 
 def load_cfg(parser):
     """
-    ⚙️ 正确加载 YAML 配置文件（修正版）：
-    1️⃣ 先读取命令行中的 --cfg
-    2️⃣ 再读取 YAML 内容并更新 parser 默认值
-    3️⃣ 最后再解析完整参数（确保 YAML 字段都进入 args）
+    ⚙️ 加载 YAML 配置文件并合并到 args
     """
-    # 第一次解析，只为了拿到 --cfg
-    temp_args, _ = parser.parse_known_args()
-    cfg_path = getattr(temp_args, "cfg", "")
-
-    # 如果传入了 YAML 文件路径
-    if cfg_path and os.path.isfile(cfg_path):
-        print(f"[cfg] 加载配置文件：{cfg_path}")
-        with open(cfg_path, "r") as f:
+    # 先解析命令行参数
+    args = parser.parse_args()
+    
+    # 如果指定了配置文件，加载并覆盖
+    if args.cfg and os.path.isfile(args.cfg):
+        print(f"✅ [cfg] 加载配置文件：{args.cfg}")
+        with open(args.cfg, "r") as f:
             cfg = yaml.safe_load(f)
-
-        # ✅ 把 YAML 键值注册为 parser 参数
+        
+        # 将 YAML 配置直接设置到 args 对象
         for key, value in cfg.items():
-            if not any(a.option_strings == [f"--{key}"] for a in parser._actions):
-                parser.add_argument(f"--{key}", type=type(value), default=value)
-            else:
-                parser.set_defaults(**{key: value})
-
-    # 再解析完整参数（合并 YAML + CLI）
-    return parser.parse_args()
+            setattr(args, key, value)
+        
+        print(f"✅ [cfg] 成功加载 {len(cfg)} 个参数")
+    elif args.cfg:
+        print(f"⚠️  [cfg] 配置文件不存在：{args.cfg}")
+    
+    return args
 
 
 def main():
@@ -78,7 +74,21 @@ def main():
     if not hasattr(args, "nowandb"):
         args.nowandb = False
 
-    print(f"\n🚀 Task={args.task} | Model={args.model} | ImageSize={args.size}\n")
+    # 打印关键配置信息
+    print(f"\n{'='*60}")
+    print(f"🚀 训练配置")
+    print(f"{'='*60}")
+    print(f"  任务类型: {args.task}")
+    print(f"  模型: {args.model}")
+    print(f"  图像尺寸: {args.size}")
+    print(f"  Patch 尺寸: {args.patch}")
+    print(f"  模型维度: {args.dim}")
+    print(f"  深度: {args.depth}")
+    print(f"  注意力头数: {args.heads}")
+    print(f"  Batch Size: {args.bs}")
+    print(f"  学习率: {args.lr}")
+    print(f"  训练轮数: {args.n_epochs}")
+    print(f"{'='*60}\n")
 
     # -------- 启动任务 -------- #
     task = build_task(args)
