@@ -1,0 +1,74 @@
+# ==============================================
+# 🧠 Project: SCOPE / ViTCoPE Research Framework
+# Author: Hetu Lu
+# Purpose: Ignore unnecessary or large files
+# ==============================================
+
+# --- 🗂️ Dataset folders ---
+datasets/ADE20K/
+datasets/cifar-10-batches-py/
+datasets/cifar-100-python/
+datasets/coco/
+datasets/__pycache__/
+
+# Keep useful script
+!datasets/classification.py
+
+# --- 🧱 Model weights / checkpoints ---
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.bin
+
+# --- 🧪 Training outputs ---
+outputs/
+results/
+runs/
+experiments/
+checkpoints/
+wandb/
+logs/
+*.log
+*.csv
+
+# --- 🧰 Temporary or cache files ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tmp
+*.bak
+*.swp
+*.npy
+*.npz
+
+# --- 🧩 Virtual environments ---
+env/
+venv/
+myenv/
+.venv/
+*.egg-info/
+
+# --- 🧠 IDE / Editor specific ---
+.vscode/
+.idea/
+*.code-workspace
+
+# --- 🧮 OS system files ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- 📦 Package / build files ---
+build/
+dist/
+*.egg
+*.egg-info/
+*.tar.gz
+
+# --- 🚫 Cache / test artifacts ---
+.cache/
+pytest_cache/
+.ipynb_checkpoints/
