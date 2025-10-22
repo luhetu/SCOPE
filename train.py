@@ -45,8 +45,36 @@ def main():
         args.task = "cls"
     if not hasattr(args, "model"):
         args.model = "vit"
+    if not hasattr(args, "data_dir"):
+        args.data_dir = "./data/imagenet"
     if not hasattr(args, "size"):
         args.size = 224
+    if not hasattr(args, "patch"):
+        args.patch = 16
+    if not hasattr(args, "dim"):
+        args.dim = 192
+    if not hasattr(args, "depth"):
+        args.depth = 12
+    if not hasattr(args, "heads"):
+        args.heads = 3
+    if not hasattr(args, "mlp_dim"):
+        args.mlp_dim = 768
+    if not hasattr(args, "bs"):
+        args.bs = 256
+    if not hasattr(args, "n_epochs"):
+        args.n_epochs = 100
+    if not hasattr(args, "lr"):
+        args.lr = 3e-4
+    if not hasattr(args, "min_lr"):
+        args.min_lr = 1e-5
+    if not hasattr(args, "warmup_epochs"):
+        args.warmup_epochs = 2
+    if not hasattr(args, "opt"):
+        args.opt = "adamw"
+    if not hasattr(args, "amp"):
+        args.amp = True
+    if not hasattr(args, "aug"):
+        args.aug = True
     if not hasattr(args, "nowandb"):
         args.nowandb = False
 
