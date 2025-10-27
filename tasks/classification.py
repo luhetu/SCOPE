@@ -3,7 +3,7 @@ import os, time, torch
 import torch.nn as nn
 from utils.optim import build_optimizer, build_scheduler
 from utils.progress_bar import progress_bar
-from datasets.classification import build_imagenet_loader
+from datasets.classification import build_imagenet_loader, build_cifar10_loader, build_cifar100_loader
 import wandb
 
 
@@ -11,6 +11,15 @@ class ClassificationTask:
     def __init__(self, args):
         self.args = args
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # 根据数据集类型确定类别数
+        dataset_name = getattr(args, 'dataset', 'imagenet')
+        if dataset_name == 'cifar10':
+            self.num_classes = 10
+        elif dataset_name == 'cifar100':
+            self.num_classes = 100
+        else:  # imagenet or default
+            self.num_classes = 1000
 
         # ------------------ 模型选择 ------------------ #
         if args.model == 'vit':
@@ -18,7 +27,7 @@ class ClassificationTask:
             self.net = ViT(
                 image_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
@@ -29,7 +38,7 @@ class ClassificationTask:
             self.net = ViTcope(
                 image_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
@@ -42,7 +51,7 @@ class ClassificationTask:
             self.net = ViTcope(
                 image_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
@@ -55,7 +64,7 @@ class ClassificationTask:
             self.net = ViTCoPE_EmbedFull(
                 image_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
@@ -69,7 +78,7 @@ class ClassificationTask:
             self.net = ViTScope(
                 image_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
@@ -80,7 +89,7 @@ class ClassificationTask:
             self.net = SwinTransformer(
                 img_size=args.size,
                 patch_size=args.patch,
-                num_classes=1000,
+                num_classes=self.num_classes,
                 embed_dim=args.embed_dim,
                 depths=args.depths,
                 num_heads=args.num_heads,
@@ -92,9 +101,21 @@ class ClassificationTask:
             raise ValueError(f"❌ Unknown model: {args.model}")
 
         self.net = self.net.to(self.device)
-        self.trainloader, self.valloader = build_imagenet_loader(
-            args.data_dir, args.size, args.bs, 4, args.aug
-        )
+        
+        # 根据数据集类型加载数据
+        dataset_name = getattr(args, 'dataset', 'imagenet')
+        if dataset_name == 'cifar10':
+            self.trainloader, self.valloader = build_cifar10_loader(
+                args.data_dir, args.size, args.bs, 4, args.aug
+            )
+        elif dataset_name == 'cifar100':
+            self.trainloader, self.valloader = build_cifar100_loader(
+                args.data_dir, args.size, args.bs, 4, args.aug
+            )
+        else:  # imagenet or default
+            self.trainloader, self.valloader = build_imagenet_loader(
+                args.data_dir, args.size, args.bs, 4, args.aug
+            )
 
         # ------------------ 优化器与损失函数 ------------------ #
         # Label smoothing 需要 PyTorch >= 1.10
@@ -114,8 +135,14 @@ class ClassificationTask:
         # ------------------ WandB ------------------ #
         self.use_wandb = not args.nowandb
         if self.use_wandb:
-            watermark = f"{args.model}_img{args.size}_lr{args.lr}"
-            wandb.init(project="imagenet-1k-scope", name=watermark)
+            # 根据数据集统一项目名
+            dataset_name = getattr(args, 'dataset', 'imagenet')
+            project_name = f"{dataset_name}-experiments"
+            
+            # 运行名称包含模型、数据集和关键参数
+            watermark = f"{args.model}_{dataset_name}_size{args.size}_patch{args.patch}_dim{args.dim}_depth{args.depth}_lr{args.lr}"
+            
+            wandb.init(project=project_name, name=watermark)
             wandb.config.update(vars(args))
             wandb.watch(self.net, log="all", log_freq=100)
 
@@ -188,7 +215,8 @@ class ClassificationTask:
 
     # ------------------------------------------------------- #
     def train(self):
-        print(f"🚀 Start training {self.args.model} for {self.args.n_epochs} epochs on ImageNet-1k\n")
+        dataset_name = getattr(self.args, 'dataset', 'imagenet').upper()
+        print(f"🚀 Start training {self.args.model} for {self.args.n_epochs} epochs on {dataset_name}\n")
         for epoch in range(self.args.n_epochs):
             t0 = time.time()
             train_loss, train_acc = self.train_one_epoch(epoch)

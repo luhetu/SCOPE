@@ -20,7 +20,7 @@ def load_cfg(parser):
             # 确保数值类型参数被正确转换
             if key in ['lr', 'min_lr']:
                 value = float(value)
-            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'warmup_epochs']:
+            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'warmup_epochs', 'dim_head']:
                 value = int(value)
             elif key in ['amp', 'aug', 'nowandb']:
                 value = bool(value)

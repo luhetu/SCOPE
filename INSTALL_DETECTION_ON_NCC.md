@@ -51,8 +51,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 # ==================== 步骤 2: 安装 MMCV-Full ====================
 # 使用预编译的轮子（更快，避免编译错误）
-pip install mmcv-full==1.3.17 \
-    -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.9.0/index.html
+pip install mmcv-full==1.3.17 -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.9.0/index.html
 
 # 验证 MMCV
 python -c "from mmcv import _ext; print('MMCV OK')"

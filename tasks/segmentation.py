@@ -46,11 +46,16 @@ class SegmentationTask:
         # WandB
         self.use_wandb = WANDB_AVAILABLE and not args.nowandb
         if self.use_wandb:
-            watermark = f"{args.model}_seg_bs{args.bs}"
-            wandb.init(project="ade20k-segmentation", name=watermark)
+            # 统一项目名为数据集名-experiments
+            project_name = "ade20k-experiments"
+            
+            # 运行名称包含模型、任务和关键参数
+            watermark = f"{args.model}_upernet_size{args.size}_bs{args.bs}_lr{args.lr}"
+            
+            wandb.init(project=project_name, name=watermark)
             wandb.config.update(vars(args))
         elif not WANDB_AVAILABLE and not args.nowandb:
-            print("⚠️  WandB 未安装，跳过日志记录")
+            print("WARNING: WandB not installed, skipping logging")
         
         # 设置模型类别
         self.model.CLASSES = self.datasets[0].CLASSES
