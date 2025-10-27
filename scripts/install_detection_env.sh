@@ -43,7 +43,16 @@ python -c "from mmcv import _ext; print('✅ MMCV-Full 验证成功')" || echo "
 
 # ==================== 步骤 3: 安装其他依赖 ====================
 echo ""
-echo "📦 步骤 3/3: 安装其他依赖包"
+echo "📦 步骤 3/4: 先安装构建依赖"
+
+# pycocotools 需要先安装 Cython
+pip install cython numpy
+
+echo "✅ 构建依赖安装完成"
+
+# ==================== 步骤 4: 安装其他依赖 ====================
+echo ""
+echo "📦 步骤 4/4: 安装其他依赖包"
 
 # 创建临时文件，排除 PyTorch 和 MMCV
 cat requirements_detection.txt | \

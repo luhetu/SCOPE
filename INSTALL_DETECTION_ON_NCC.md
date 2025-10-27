@@ -57,13 +57,17 @@ pip install mmcv-full==1.3.17 \
 # 验证 MMCV
 python -c "from mmcv import _ext; print('MMCV OK')"
 
-# ==================== 步骤 3: 安装其他依赖 ====================
+# ==================== 步骤 3: 先安装构建依赖 ====================
+# pycocotools 需要先安装 Cython
+pip install cython numpy
+
+# ==================== 步骤 4: 安装其他依赖 ====================
 # 安装剩余的包
 pip install opencv-python Pillow matplotlib
 pip install pycocotools terminaltables
 pip install timm==0.6.12 einops
 pip install wandb tensorboard
-pip install numpy scipy scikit-learn
+pip install scipy scikit-learn
 pip install tqdm pyyaml
 ```
 
