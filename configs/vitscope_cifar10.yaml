@@ -1,0 +1,20 @@
+task: cls
+model: vitscope
+dataset: cifar10
+data_dir: ./data
+bs: 128
+size: 32
+n_epochs: 100
+patch: 4
+dim: 512
+depth: 6
+heads: 8
+mlp_dim: 512
+lr: 1e-4
+min_lr: 1e-6
+warmup_epochs: 5
+opt: adam
+amp: true
+aug: true
+nowandb: false
+
