@@ -35,6 +35,35 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim
             )
+        elif args.model == 'vitcope_embed':
+            from models.vitcope_embed import ViTcope
+            # 使用 dim_head 参数（如果有），否则默认为 64
+            dim_head = getattr(args, 'dim_head', 64)
+            self.net = ViTcope(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=1000,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                dim_head=dim_head,
+                pool='mean'
+            )
+        elif args.model == 'vitcope_embedfull':
+            from models.vitcope_embedfull import ViTCoPE_EmbedFull
+            self.net = ViTCoPE_EmbedFull(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=1000,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                drop=0.1,
+                emb_drop=0.1,
+                use_cls=True
+            )
         elif args.model == 'vitscope':
             from models.vitscope import ViTScope
             self.net = ViTScope(
