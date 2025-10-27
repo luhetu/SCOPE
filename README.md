@@ -73,6 +73,24 @@ pip install -r requirements_detection.txt
 
 ---
 
+## 🎓 集群部署
+
+**在学校计算集群（如 NCC）上运行？** 
+
+👉 **查看 [NCC_TUTORIAL.md](NCC_TUTORIAL.md)** - 手把手教你从零开始在集群上配置和运行！
+
+📦 包含：
+- Conda 环境创建
+- 依赖包安装
+- 数据集上传
+- SLURM 脚本编写
+- 任务提交和监控
+- 常见问题解决
+
+或参考 [DEPLOY_ON_CLUSTER.md](DEPLOY_ON_CLUSTER.md) 获取更多集群部署信息。
+
+---
+
 ## 🏃 Quick Start
 
 ### Image Classification
