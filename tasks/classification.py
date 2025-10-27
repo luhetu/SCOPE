@@ -46,6 +46,19 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim
             )
+        elif args.model == 'swin':
+            from models.swin_transformer import SwinTransformer
+            self.net = SwinTransformer(
+                img_size=args.size,
+                patch_size=args.patch,
+                num_classes=1000,
+                embed_dim=args.embed_dim,
+                depths=args.depths,
+                num_heads=args.num_heads,
+                window_size=args.window_size,
+                drop_path_rate=args.drop_path_rate,
+                patch_norm=True
+            )
         else:
             raise ValueError(f"❌ Unknown model: {args.model}")
 
@@ -55,7 +68,12 @@ class ClassificationTask:
         )
 
         # ------------------ 优化器与损失函数 ------------------ #
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        # Label smoothing 需要 PyTorch >= 1.10
+        pytorch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+        if pytorch_version >= (1, 10):
+            self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        else:
+            self.criterion = nn.CrossEntropyLoss()
         self.optimizer = build_optimizer(self.net, args)
         self.scheduler = build_scheduler(self.optimizer, args)
         self.scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
@@ -81,7 +99,7 @@ class ClassificationTask:
             self.optimizer.zero_grad(set_to_none=True)
 
             # 混合精度训练
-            with torch.cuda.amp.autocast(enabled=self.args.amp):
+            with torch.amp.autocast('cuda', enabled=self.args.amp):
                 outputs = self.net(inputs)
                 loss = self.criterion(outputs, targets)
 
@@ -116,6 +134,13 @@ class ClassificationTask:
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                
+                progress_bar(
+                    batch_idx,
+                    len(self.valloader),
+                    f"Loss:{total_loss/(batch_idx+1):.3f} | Acc:{100.*correct/total:.2f}%"
+                )
+        
         acc = 100. * correct / total
         return total_loss / (batch_idx + 1), acc
 

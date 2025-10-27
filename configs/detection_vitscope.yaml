@@ -1,0 +1,28 @@
+# configs/detection_vitscope.yaml - ViT+SCoPE + Mask R-CNN
+task: det
+model: vitscope
+
+# 数据配置
+data_dir: /home/hetu/MY project/SCOPE/datasets/coco
+bs: 1  # ViT+SCoPE 内存占用大，使用 bs=1
+img_scale: (512, 512)  # 进一步降低分辨率 (32x32=1024 patches vs 50x50=2500 patches)
+
+# ViT+SCoPE 配置 (Tiny)
+size: 224
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+
+# 训练配置
+n_epochs: 12
+lr: 1e-4
+min_lr: 1e-6
+warmup_epochs: 1
+weight_decay: 0.05
+opt: adamw
+amp: true
+nowandb: false
+

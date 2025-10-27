@@ -1,0 +1,27 @@
+# configs/seg_swin.yaml - Swin Transformer + UPerNet for ADE20K
+task: seg
+model: swin
+
+# 数据配置
+data_dir: /home/hetu/MY project/SCOPE/datasets/ADE20K/ADEChallengeData2016
+bs: 2  # 分割任务显存占用大，batch size 要小
+
+# Swin Transformer 配置
+size: 512
+patch: 4
+embed_dim: 96
+depths: [2, 2, 6, 2]
+num_heads: [3, 6, 12, 24]
+window_size: 7
+drop_path_rate: 0.3
+
+# 训练配置
+n_epochs: 80  # 80k iterations / 1000 per epoch
+lr: 6e-5
+min_lr: 1e-6
+warmup_epochs: 1
+weight_decay: 0.01
+opt: adamw
+amp: false
+nowandb: false
+

@@ -1,0 +1,27 @@
+# configs/seg_vitcope.yaml - ViT+CoPE + UPerNet for ADE20K
+task: seg
+model: vitcope
+
+# 数据配置
+data_dir: /home/hetu/MY project/SCOPE/datasets/ADE20K/ADEChallengeData2016
+bs: 2
+
+# ViT+CoPE 配置 (Tiny)
+size: 512
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+
+# 训练配置
+n_epochs: 80
+lr: 6e-5
+min_lr: 1e-6
+warmup_epochs: 1
+weight_decay: 0.01
+opt: adamw
+amp: false
+nowandb: false
+

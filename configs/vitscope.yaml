@@ -3,7 +3,7 @@ task: cls
 model: vitscope
 data_dir: /home/hetu/ImageNet
 bs: 256
-size: 256
+size: 224
 n_epochs: 100
 patch: 32
 dimhead: 384

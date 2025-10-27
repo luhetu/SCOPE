@@ -1,39 +1,55 @@
 # -*- coding: utf-8 -*-
 import argparse
+import sys
+import warnings
 import os
-import yaml
+
+# 设置环境变量以减少输出
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 警告
+os.environ['PYTHONWARNINGS'] = 'ignore'   # 抑制 Python 警告
+
+# 过滤常见警告
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', message='.*Torch was not compiled with flash attention.*')
+
 from tasks import build_task
+from utils.cfg import load_cfg
 
 
-def load_cfg(parser):
-    """
-    ⚙️ 加载 YAML 配置文件并合并到 args
-    """
-    # 先解析命令行参数
-    args = parser.parse_args()
+def check_environment(args):
+    """检查当前环境是否适合运行指定的任务"""
+    import torch
     
-    # 如果指定了配置文件，加载并覆盖
-    if args.cfg and os.path.isfile(args.cfg):
-        print(f"✅ [cfg] 加载配置文件：{args.cfg}")
-        with open(args.cfg, "r") as f:
-            cfg = yaml.safe_load(f)
-        
-        # 将 YAML 配置直接设置到 args 对象，确保类型正确
-        for key, value in cfg.items():
-            # 确保数值类型参数被正确转换
-            if key in ['lr', 'min_lr']:
-                value = float(value)
-            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'warmup_epochs']:
-                value = int(value)
-            elif key in ['amp', 'aug', 'nowandb']:
-                value = bool(value)
-            setattr(args, key, value)
-        
-        print(f"✅ [cfg] 成功加载 {len(cfg)} 个参数")
-    elif args.cfg:
-        print(f"⚠️  [cfg] 配置文件不存在：{args.cfg}")
+    task = args.task
+    pytorch_version = torch.__version__
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
     
-    return args
+    # 检测和分割任务需要 mmcv-full
+    if task in ['det', 'seg']:
+        try:
+            from mmcv import _ext
+            task_name = "检测" if task == 'det' else "分割"
+            print(f"✅ {task_name}环境正确 (PyTorch {pytorch_version})")
+        except ImportError:
+            task_name = "检测" if task == 'det' else "分割"
+            print("\n" + "="*60)
+            print("⚠️  环境不匹配警告")
+            print("="*60)
+            print(f"当前任务：{task_name} ({task})")
+            print(f"当前环境：分类环境 (PyTorch {pytorch_version})")
+            print(f"\n{task_name}任务需要使用专用环境！")
+            print("\n请运行以下命令：")
+            print("  source venv_swin_det/bin/activate")
+            print(f"  python train.py --cfg {args.cfg}")
+            print("\n如果还没有创建检测环境，请先运行：")
+            print("  bash INSTALL_DETECTION_NOW.sh")
+            print("="*60 + "\n")
+            sys.exit(1)
+    else:
+        # 分类任务
+        print(f"✅ 分类环境 (Python {python_version}, PyTorch {pytorch_version})")
 
 
 def main():
@@ -42,44 +58,9 @@ def main():
 
     # ✅ 正确加载配置
     args = load_cfg(parser)
-
-    # -------- 默认兜底值（防止 YAML 缺少字段） -------- #
-    if not hasattr(args, "task"):
-        args.task = "cls"
-    if not hasattr(args, "model"):
-        args.model = "vit"
-    if not hasattr(args, "data_dir"):
-        args.data_dir = "./data/imagenet"
-    if not hasattr(args, "size"):
-        args.size = 224
-    if not hasattr(args, "patch"):
-        args.patch = 16
-    if not hasattr(args, "dim"):
-        args.dim = 192
-    if not hasattr(args, "depth"):
-        args.depth = 12
-    if not hasattr(args, "heads"):
-        args.heads = 3
-    if not hasattr(args, "mlp_dim"):
-        args.mlp_dim = 768
-    if not hasattr(args, "bs"):
-        args.bs = 256
-    if not hasattr(args, "n_epochs"):
-        args.n_epochs = 100
-    if not hasattr(args, "lr"):
-        args.lr = 3e-4
-    if not hasattr(args, "min_lr"):
-        args.min_lr = 1e-5
-    if not hasattr(args, "warmup_epochs"):
-        args.warmup_epochs = 2
-    if not hasattr(args, "opt"):
-        args.opt = "adamw"
-    if not hasattr(args, "amp"):
-        args.amp = True
-    if not hasattr(args, "aug"):
-        args.aug = True
-    if not hasattr(args, "nowandb"):
-        args.nowandb = False
+    
+    # ✅ 检查环境
+    check_environment(args)
 
     # 打印关键配置信息
     print(f"\n{'='*60}")
@@ -89,9 +70,25 @@ def main():
     print(f"  模型: {args.model}")
     print(f"  图像尺寸: {args.size}")
     print(f"  Patch 尺寸: {args.patch}")
-    print(f"  模型维度: {args.dim}")
-    print(f"  深度: {args.depth}")
-    print(f"  注意力头数: {args.heads}")
+    
+    # 根据模型类型打印不同的架构参数
+    if args.model == 'swin':
+        print(f"  模型维度: {args.embed_dim}")
+        print(f"  深度: {args.depths}")
+        print(f"  注意力头数: {args.num_heads}")
+        print(f"  MLP比率: 4.0")
+        print(f"  窗口大小: {args.window_size}")
+    else:
+        # ViT/CoPE/SCoPE 使用 dim/depth/heads
+        if hasattr(args, 'dim'):
+            print(f"  模型维度: {args.dim}")
+        if hasattr(args, 'depth'):
+            print(f"  深度: {args.depth}")
+        if hasattr(args, 'heads'):
+            print(f"  注意力头数: {args.heads}")
+        if hasattr(args, 'mlp_dim'):
+            print(f"  MLP维度: {args.mlp_dim}")
+    
     print(f"  Batch Size: {args.bs}")
     print(f"  学习率: {args.lr}")
     print(f"  训练轮数: {args.n_epochs}")

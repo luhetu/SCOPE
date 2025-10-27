@@ -1,0 +1,36 @@
+# ====================================================================
+# Classification Environment Requirements
+# 适用于 ViT / CoPE / SCoPE / Swin 分类任务
+# Python 3.12 | PyTorch 2.7.0 | CUDA 12.6
+# ====================================================================
+
+# ==================== Core Deep Learning ====================
+torch>=2.0.0
+torchvision>=0.15.0
+# 使用最新稳定版 PyTorch
+
+# ==================== Vision & Image Processing ====================
+Pillow>=9.0.0
+opencv-python>=4.5.0
+
+# ==================== Model Architectures ====================
+timm>=0.6.0
+einops>=0.6.0
+
+# ==================== Training & Logging ====================
+wandb>=0.15.0
+tensorboard>=2.10.0
+tqdm>=4.60.0
+
+# ==================== Data & Config ====================
+PyYAML>=6.0
+torchvision>=0.15.0
+
+# ==================== Utilities ====================
+numpy>=1.21.0
+matplotlib>=3.5.0
+
+# ==================== Optional ====================
+# jupyter  # for notebook experiments
+# tensorboardX  # alternative to tensorboard
+
