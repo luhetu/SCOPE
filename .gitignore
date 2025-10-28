@@ -37,6 +37,7 @@ wandb/
 
 # Datasets (太大，不上传)
 datasets/ADE20K/
+datasets/ADEChallengeData2016/
 datasets/coco/
 datasets/cifar-*/
 datasets/ImageNet/
@@ -44,6 +45,7 @@ datasets/ImageNet/
 # IDE
 .vscode/
 .idea/
+.history/
 *.swp
 *.swo
 *~
