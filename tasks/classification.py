@@ -34,17 +34,6 @@ class ClassificationTask:
                 mlp_dim=args.mlp_dim
             )
         elif args.model == 'vitcope':
-            from models.vitcope import ViTcope
-            self.net = ViTcope(
-                image_size=args.size,
-                patch_size=args.patch,
-                num_classes=self.num_classes,
-                dim=args.dim,
-                depth=args.depth,
-                heads=args.heads,
-                mlp_dim=args.mlp_dim
-            )
-        elif args.model == 'vitcope_embed':
             from models.vitcope_embed import ViTcope
             # 使用 dim_head 参数（如果有），否则默认为 64
             dim_head = getattr(args, 'dim_head', 64)
@@ -59,9 +48,11 @@ class ClassificationTask:
                 dim_head=dim_head,
                 pool='mean'
             )
-        elif args.model == 'vitcope_embedfull':
-            from models.vitcope_embedfull import ViTCoPE_EmbedFull
-            self.net = ViTCoPE_EmbedFull(
+        elif args.model == 'vitscope':
+            from models.vitscope_embed import ViTScope
+            # 使用 dim_head 参数（如果有），否则默认为 64
+            dim_head = getattr(args, 'dim_head', 64)
+            self.net = ViTScope(
                 image_size=args.size,
                 patch_size=args.patch,
                 num_classes=self.num_classes,
@@ -69,11 +60,10 @@ class ClassificationTask:
                 depth=args.depth,
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
-                drop=0.1,
-                emb_drop=0.1,
-                use_cls=True
+                dim_head=dim_head,
+                pool='mean'
             )
-        elif args.model == 'vitscope':
+        elif args.model == 'vitscope_old':
             from models.vitscope import ViTScope
             self.net = ViTScope(
                 image_size=args.size,

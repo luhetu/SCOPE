@@ -10,6 +10,7 @@ dim: 512
 depth: 6
 heads: 8
 mlp_dim: 512
+dim_head: 64
 lr: 1e-4
 min_lr: 1e-6
 warmup_epochs: 5

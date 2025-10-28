@@ -53,32 +53,12 @@ def main():
     
     results = {}
     
-    # ==================== 1. 原版 ViTCoPE (Attention层) ==================== #
+    # ==================== 1. ViTCoPE (Embedding层) ==================== #
     try:
-        from models.vitcope import ViTcope
+        from models.vitcope_embed import ViTcope
         results['vitcope'] = test_model(
-            'ViTCoPE (Attention层)',
+            'ViTCoPE (Embedding层)',
             ViTcope,
-            {
-                'image_size': 224,
-                'patch_size': 32,
-                'num_classes': 1000,
-                'dim': 384,
-                'depth': 12,
-                'heads': 6,
-                'mlp_dim': 1536,
-            }
-        )
-    except ImportError as e:
-        print(f"\n❌ vitcope.py 导入失败: {e}")
-        results['vitcope'] = False
-    
-    # ==================== 2. ViTCoPE_Embed (Embedding层，无固定位置编码) ==================== #
-    try:
-        from models.vitcope_embed import ViTcope as ViTcopeEmbed
-        results['vitcope_embed'] = test_model(
-            'ViTCoPE_Embed (Embedding层，纯动态)',
-            ViTcopeEmbed,
             {
                 'image_size': 224,
                 'patch_size': 32,
@@ -93,14 +73,14 @@ def main():
         )
     except ImportError as e:
         print(f"\n❌ vitcope_embed.py 导入失败: {e}")
-        results['vitcope_embed'] = False
+        results['vitcope'] = False
     
-    # ==================== 3. ViTCoPE_EmbedFull (Embedding层，固定+动态) ==================== #
+    # ==================== 2. ViTSCoPE (Embedding层) ==================== #
     try:
-        from models.vitcope_embedfull import ViTCoPE_EmbedFull
-        results['vitcope_embedfull'] = test_model(
-            'ViTCoPE_EmbedFull (Embedding层，固定+动态)',
-            ViTCoPE_EmbedFull,
+        from models.vitscope_embed import ViTScope
+        results['vitscope'] = test_model(
+            'ViTSCoPE (Embedding层)',
+            ViTScope,
             {
                 'image_size': 224,
                 'patch_size': 32,
@@ -109,14 +89,13 @@ def main():
                 'depth': 12,
                 'heads': 6,
                 'mlp_dim': 1536,
-                'drop': 0.1,
-                'emb_drop': 0.1,
-                'use_cls': True,
+                'dim_head': 64,
+                'pool': 'mean',
             }
         )
     except ImportError as e:
-        print(f"\n❌ vitcope_embedfull.py 导入失败: {e}")
-        results['vitcope_embedfull'] = False
+        print(f"\n❌ vitscope_embed.py 导入失败: {e}")
+        results['vitscope'] = False
     
     # ==================== 总结 ==================== #
     print("\n" + "="*60)
@@ -133,9 +112,9 @@ def main():
     if all_passed:
         print("🎉 所有模型测试通过！")
         print("\n下一步:")
-        print("  python train.py --cfg configs/vitcope.yaml")
-        print("  python train.py --cfg configs/vitcope_embed.yaml")
-        print("  python train.py --cfg configs/vitcope_embedfull.yaml")
+        print("  python train.py --cfg configs/vit.yaml      # ViT baseline")
+        print("  python train.py --cfg configs/vitcope.yaml  # CoPE (Embedding)")
+        print("  python train.py --cfg configs/vitscope.yaml # SCoPE (Embedding)")
     else:
         print("⚠️  部分模型测试失败，请检查上面的错误信息")
         sys.exit(1)

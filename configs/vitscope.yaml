@@ -1,4 +1,3 @@
-# configs/imagenet_vitscope.yaml
 task: cls
 model: vitscope
 data_dir: /home/hetu/ImageNet
@@ -6,12 +5,15 @@ bs: 256
 size: 224
 n_epochs: 100
 patch: 32
-dimhead: 384
+dim: 384
+depth: 12
 heads: 6
 mlp_dim: 1536
+dim_head: 64
 lr: 3e-4
 min_lr: 1e-5
 warmup_epochs: 2
 opt: adamw
 amp: true
 aug: true
+nowandb: false

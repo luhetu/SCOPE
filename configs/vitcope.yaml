@@ -2,13 +2,14 @@ task: cls
 model: vitcope
 data_dir: /home/hetu/ImageNet
 bs: 256
-size: 256
+size: 224
 n_epochs: 100
 patch: 32
 dim: 384
 depth: 12
 heads: 6
 mlp_dim: 1536
+dim_head: 64
 lr: 3e-4
 min_lr: 1e-5
 warmup_epochs: 2
