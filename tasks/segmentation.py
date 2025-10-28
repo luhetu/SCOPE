@@ -117,6 +117,7 @@ class SegmentationTask:
         cfg.log_level = 'INFO'
         cfg.work_dir = f'./work_dirs/{args.model}_upernet'
         cfg.load_from = None
+        cfg.gpu_ids = [0]  # 单GPU训练
         cfg.resume_from = None
         cfg.workflow = [('train', 1)]
         cfg.cudnn_benchmark = True
@@ -141,7 +142,7 @@ class SegmentationTask:
             channels=512,
             dropout_ratio=0.1,
             num_classes=150,  # ADE20K has 150 classes
-            norm_cfg=dict(type='SyncBN', requires_grad=True),
+            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),  # 使用GroupNorm（支持bs=1）
             align_corners=False,
             loss_decode=dict(
                 type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0)
@@ -157,7 +158,7 @@ class SegmentationTask:
             concat_input=False,
             dropout_ratio=0.1,
             num_classes=150,
-            norm_cfg=dict(type='SyncBN', requires_grad=True),
+            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),  # 使用GroupNorm（支持bs=1）
             align_corners=False,
             loss_decode=dict(
                 type='CrossEntropyLoss', use_sigmoid=False, loss_weight=0.4)

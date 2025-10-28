@@ -3,8 +3,8 @@ task: seg
 model: vit
 
 # 数据配置
-data_dir: ./datasets/ADEChallengeData2016
-bs: 2
+data_dir: ./datasets/ADE20K/ADEChallengeData2016
+bs: 1
 
 # ViT 配置 (Tiny)
 size: 512

@@ -4,9 +4,9 @@ model: vit
 
 # 数据配置
 data_dir: ./datasets/coco
-bs: 4
-pretrained: null  # 预训练权重路径，例如: ./checkpoint/vit_best.pth
-img_scale: (512, 512)  # 降低分辨率以支持大batch
+bs: 1
+pretrained: ./checkpoint/vit-16-imagenet-1k-original-ckpt.t7
+img_scale: (320, 320)  # 进一步降低分辨率避免 OOM
 
 # ViT 配置 (Tiny)
 size: 224
@@ -19,7 +19,7 @@ dim_head: 64
 
 # 训练配置
 n_epochs: 12
-lr: 2e-4  # bs=4, 学习率相应调整
+lr: 5e-5  # bs=1, 学习率相应降低
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05

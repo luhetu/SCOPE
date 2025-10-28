@@ -34,7 +34,7 @@ class ClassificationTask:
                 mlp_dim=args.mlp_dim
             )
         elif args.model == 'vitcope':
-            from models.vitcope_embed import ViTcope
+            from models.vitcope import ViTcope
             # 使用 dim_head 参数（如果有），否则默认为 64
             dim_head = getattr(args, 'dim_head', 64)
             self.net = ViTcope(
@@ -46,7 +46,9 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
                 dim_head=dim_head,
-                pool='mean'
+                pool='mean',
+                dropout=0.1,
+                emb_dropout=0.1
             )
         elif args.model == 'vitscope':
             from models.vitscope_embed import ViTScope
@@ -120,7 +122,12 @@ class ClassificationTask:
 
         # ------------------ 训练状态 ------------------ #
         self.best_acc = 0.0
+        self.start_epoch = 0
         self.start_time = time.time()
+        
+        # ------------------ 断点续训 ------------------ #
+        if hasattr(args, 'resume') and args.resume:
+            self.load_checkpoint(args.resume)
 
         # ------------------ WandB ------------------ #
         self.use_wandb = not args.nowandb
@@ -197,17 +204,46 @@ class ClassificationTask:
         state = {
             'model': self.net.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict(),
+            'scaler': self.scaler.state_dict(),
             'epoch': epoch,
             'acc': acc,
+            'best_acc': self.best_acc,
         }
         torch.save(state, filename)
         print(f"💾 Saved: {filename} (acc={acc:.2f}%)")
+    
+    def load_checkpoint(self, checkpoint_path):
+        """从 checkpoint 恢复训练"""
+        if not os.path.exists(checkpoint_path):
+            print(f"⚠️  Checkpoint not found: {checkpoint_path}")
+            return
+        
+        print(f"📂 Loading checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        self.net.load_state_dict(checkpoint['model'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        
+        if 'scheduler' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler'])
+        if 'scaler' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler'])
+        
+        self.start_epoch = checkpoint['epoch'] + 1
+        self.best_acc = checkpoint.get('best_acc', checkpoint['acc'])
+        
+        print(f"✅ Resumed from epoch {checkpoint['epoch']} (acc={checkpoint['acc']:.2f}%, best={self.best_acc:.2f}%)")
 
     # ------------------------------------------------------- #
     def train(self):
         dataset_name = getattr(self.args, 'dataset', 'imagenet').upper()
-        print(f"🚀 Start training {self.args.model} for {self.args.n_epochs} epochs on {dataset_name}\n")
-        for epoch in range(self.args.n_epochs):
+        if self.start_epoch > 0:
+            print(f"🔄 Resuming training from epoch {self.start_epoch} to {self.args.n_epochs} on {dataset_name}\n")
+        else:
+            print(f"🚀 Start training {self.args.model} for {self.args.n_epochs} epochs on {dataset_name}\n")
+        
+        for epoch in range(self.start_epoch, self.args.n_epochs):
             t0 = time.time()
             train_loss, train_acc = self.train_one_epoch(epoch)
             val_loss, val_acc = self.validate(epoch)

@@ -454,22 +454,48 @@ class DetectionTask:
         
         # 过滤并重命名权重，只加载backbone部分
         backbone_dict = {}
+        skipped_keys = []
         for k, v in pretrained_dict.items():
-            # 跳过分类头
-            if 'mlp_head' in k or 'head' in k or 'fc' in k:
+            # 跳过分类头和 CLS token
+            if 'mlp_head' in k or 'head' in k or 'fc' in k or 'cls_token' in k:
+                skipped_keys.append(k)
                 continue
+            
+            # 键名映射：分类模型 -> 检测模型
+            # transformer.layers.X.Y -> transformer_blocks.X.Y
+            new_k = k.replace('transformer.layers', 'transformer_blocks')
+            # to_patch_embedding.1 -> to_patch_embedding.1 (保持不变)
+            
             # 重命名为检测模型的backbone前缀
-            new_key = f'backbone.{k}'
+            new_key = f'backbone.{new_k}'
             backbone_dict[new_key] = v
         
         # 加载到检测模型
         model_dict = self.model.state_dict()
-        # 只更新存在的键
-        pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in model_dict}
+        
+        # 检查哪些键匹配
+        matched_keys = []
+        unmatched_keys = []
+        for k, v in backbone_dict.items():
+            if k in model_dict:
+                # 检查形状是否匹配
+                if model_dict[k].shape == v.shape:
+                    matched_keys.append(k)
+                else:
+                    unmatched_keys.append(f"{k} (shape mismatch: {v.shape} vs {model_dict[k].shape})")
+            else:
+                unmatched_keys.append(f"{k} (not in model)")
+        
+        # 只更新存在且形状匹配的键
+        pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in matched_keys}
         model_dict.update(pretrained_dict_filtered)
         self.model.load_state_dict(model_dict, strict=False)
         
         print(f"✅ Loaded {len(pretrained_dict_filtered)} pretrained layers")
+        print(f"   Skipped {len(skipped_keys)} classification layers (mlp_head, cls_token)")
+        print(f"   Unmatched: {len(unmatched_keys)} layers")
+        if len(unmatched_keys) > 0 and len(unmatched_keys) <= 5:
+            print(f"   Unmatched keys: {unmatched_keys[:5]}")
         print(f"   Total model layers: {len(model_dict)}")
     
     def train(self):

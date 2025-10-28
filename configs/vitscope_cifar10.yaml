@@ -6,10 +6,10 @@ bs: 128
 size: 32
 n_epochs: 100
 patch: 4
-dim: 512
-depth: 6
-heads: 8
-mlp_dim: 512
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
 dim_head: 64
 lr: 1e-4
 min_lr: 1e-6

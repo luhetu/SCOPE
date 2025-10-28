@@ -55,6 +55,7 @@ def check_environment(args):
 def main():
     parser = argparse.ArgumentParser(description="Unified ViT/CoPE/SCoPE Trainer")
     parser.add_argument("--cfg", type=str, default="", help="YAML config path")
+    parser.add_argument("--resume", type=str, default="", help="Resume from checkpoint")
 
     # ✅ 正确加载配置
     args = load_cfg(parser)
