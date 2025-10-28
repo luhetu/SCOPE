@@ -3,8 +3,9 @@ task: det
 model: swin
 
 # 数据配置
-data_dir: /home/hetu/MY project/SCOPE/datasets/coco
-bs: 2  # 检测任务显存占用大，batch size 要小
+data_dir: ./datasets/coco
+bs: 4
+pretrained: null  # 预训练权重路径，例如: ./checkpoint/swin_best.pth
 
 # Swin Transformer 配置
 size: 224
@@ -17,7 +18,7 @@ drop_path_rate: 0.1
 
 # 训练配置
 n_epochs: 12
-lr: 1e-4
+lr: 2e-4  # bs=4, 学习率相应调整
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05

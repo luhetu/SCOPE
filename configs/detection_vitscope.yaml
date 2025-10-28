@@ -3,9 +3,10 @@ task: det
 model: vitscope
 
 # 数据配置
-data_dir: /home/hetu/MY project/SCOPE/datasets/coco
-bs: 1  # ViT+SCoPE 内存占用大，使用 bs=1
-img_scale: (512, 512)  # 进一步降低分辨率 (32x32=1024 patches vs 50x50=2500 patches)
+data_dir: ./datasets/coco
+bs: 4
+pretrained: null  # 预训练权重路径，例如: ./checkpoint/vitscope_best.pth
+img_scale: (512, 512)  # 降低分辨率以支持大batch
 
 # ViT+SCoPE 配置 (Tiny)
 size: 224
@@ -18,7 +19,7 @@ dim_head: 64
 
 # 训练配置
 n_epochs: 12
-lr: 1e-4
+lr: 2e-4  # bs=4, 学习率相应调整
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05

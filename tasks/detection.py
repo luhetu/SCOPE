@@ -40,6 +40,10 @@ class DetectionTask:
             test_cfg=self.cfg.get('test_cfg')
         )
         
+        # 加载预训练权重（如果提供）
+        if hasattr(args, 'pretrained') and args.pretrained:
+            self._load_pretrained_backbone(args.pretrained)
+        
         # 构建数据集
         self.datasets = [build_dataset(self.cfg.data.train)]
         if len(self.cfg.workflow) == 2:
@@ -426,6 +430,47 @@ class DetectionTask:
         )
         
         return data
+    
+    def _load_pretrained_backbone(self, pretrained_path):
+        """加载分类任务预训练的backbone权重"""
+        import os
+        if not os.path.exists(pretrained_path):
+            print(f"⚠️  Pretrained weights not found: {pretrained_path}")
+            print("   Skipping pretrained loading, training from scratch...")
+            return
+        
+        print(f"📦 Loading pretrained backbone from: {pretrained_path}")
+        
+        # 加载分类模型的checkpoint
+        checkpoint = torch.load(pretrained_path, map_location='cpu')
+        
+        # 获取模型权重（支持不同的保存格式）
+        if 'model' in checkpoint:
+            pretrained_dict = checkpoint['model']
+        elif 'state_dict' in checkpoint:
+            pretrained_dict = checkpoint['state_dict']
+        else:
+            pretrained_dict = checkpoint
+        
+        # 过滤并重命名权重，只加载backbone部分
+        backbone_dict = {}
+        for k, v in pretrained_dict.items():
+            # 跳过分类头
+            if 'mlp_head' in k or 'head' in k or 'fc' in k:
+                continue
+            # 重命名为检测模型的backbone前缀
+            new_key = f'backbone.{k}'
+            backbone_dict[new_key] = v
+        
+        # 加载到检测模型
+        model_dict = self.model.state_dict()
+        # 只更新存在的键
+        pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in model_dict}
+        model_dict.update(pretrained_dict_filtered)
+        self.model.load_state_dict(model_dict, strict=False)
+        
+        print(f"✅ Loaded {len(pretrained_dict_filtered)} pretrained layers")
+        print(f"   Total model layers: {len(model_dict)}")
     
     def train(self):
         """开始训练"""

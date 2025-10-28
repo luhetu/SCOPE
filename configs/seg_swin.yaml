@@ -3,7 +3,7 @@ task: seg
 model: swin
 
 # 数据配置
-data_dir: /home/hetu/MY project/SCOPE/datasets/ADE20K/ADEChallengeData2016
+data_dir: ./datasets/ADEChallengeData2016
 bs: 2  # 分割任务显存占用大，batch size 要小
 
 # Swin Transformer 配置

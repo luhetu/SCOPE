@@ -3,7 +3,7 @@ task: seg
 model: vitscope
 
 # 数据配置
-data_dir: /home/hetu/MY project/SCOPE/datasets/ADE20K/ADEChallengeData2016
+data_dir: ./datasets/ADEChallengeData2016
 bs: 2
 
 # ViT+SCoPE 配置 (Tiny)

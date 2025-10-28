@@ -12,7 +12,7 @@ def load_cfg(parser):
     # 如果指定了配置文件，加载并覆盖
     if args.cfg and os.path.isfile(args.cfg):
         print(f"✅ [cfg] 加载配置文件：{args.cfg}")
-        with open(args.cfg, "r") as f:
+        with open(args.cfg, "r", encoding='utf-8') as f:
             cfg = yaml.safe_load(f)
         
         # 将 YAML 配置直接设置到 args 对象，确保类型正确
@@ -24,6 +24,8 @@ def load_cfg(parser):
                 value = int(value)
             elif key in ['amp', 'aug', 'nowandb']:
                 value = bool(value)
+            elif key in ['pretrained'] and value == 'null':
+                value = None
             setattr(args, key, value)
         
         print(f"✅ [cfg] 成功加载 {len(cfg)} 个参数")
