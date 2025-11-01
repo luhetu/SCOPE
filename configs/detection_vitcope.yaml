@@ -4,9 +4,9 @@ model: vitcope
 
 # 数据配置
 data_dir: ./datasets/coco
-bs: 4
-pretrained: null  # 预训练权重路径，例如: ./checkpoint/vitcope_embed_best.pth
-img_scale: (512, 512)  # 降低分辨率以支持大batch
+bs: 2
+pretrained: ./checkpoint/vitcope_best.pth  # 预训练权重路径
+img_scale: (512, 512)  # 平衡分辨率
 
 # ViT+CoPE 配置 (Tiny)
 size: 224
@@ -19,7 +19,7 @@ dim_head: 64
 
 # 训练配置
 n_epochs: 12
-lr: 2e-4  # bs=4, 学习率相应调整
+lr: 1e-4  # bs=2, 标准学习率
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05

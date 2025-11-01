@@ -97,7 +97,14 @@ class SegmentationTask:
         cfg.runner = dict(type='IterBasedRunner', max_iters=args.n_epochs * 1000)
         
         # ==================== Checkpoint 配置 ==================== #
-        cfg.checkpoint_config = dict(by_epoch=False, interval=5000)
+        # 保存格式: {model}_{task}_iter_{iter}.pth
+        model_name = args.model
+        task_name = args.task or 'seg'
+        cfg.checkpoint_config = dict(
+            by_epoch=False,
+            interval=5000,
+            filename_tmpl=f'{model_name}_{task_name}_iter_{{}}.pth'
+        )
         
         # ==================== 日志配置（仅在 epoch 结束时打印）==================== #
         cfg.log_config = dict(

@@ -111,7 +111,13 @@ class DetectionTask:
         cfg.optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
         
         # ==================== Checkpoint 配置 ==================== #
-        cfg.checkpoint_config = dict(interval=1)
+        # 保存格式: {model}_{task}_epoch_{epoch}.pth 和 {model}_{task}_best.pth
+        model_name = args.model
+        task_name = args.task or 'det'
+        cfg.checkpoint_config = dict(
+            interval=1,
+            filename_tmpl=f'{model_name}_{task_name}_epoch_{{}}.pth'
+        )
         
         # ==================== 日志配置（仅在 epoch 结束时打印）==================== #
         cfg.log_config = dict(
@@ -462,9 +468,52 @@ class DetectionTask:
                 continue
             
             # 键名映射：分类模型 -> 检测模型
-            # transformer.layers.X.Y -> transformer_blocks.X.Y
-            new_k = k.replace('transformer.layers', 'transformer_blocks')
-            # to_patch_embedding.1 -> to_patch_embedding.1 (保持不变)
+            new_k = k
+            
+            # 1. transformer.layers.X.Y -> transformer_blocks.X.Y (ViT格式)
+            new_k = new_k.replace('transformer.layers', 'transformer_blocks')
+            
+            # 2. blocks.X -> transformer_blocks.X (ViTCoPE分类模型格式)
+            if new_k.startswith('blocks.'):
+                new_k = new_k.replace('blocks.', 'transformer_blocks.', 1)
+            
+            # 3. to_patch.1 -> to_patch_embedding.1 (ViTCoPE/ViTSCoPE分类模型格式)
+            if new_k.startswith('to_patch.'):
+                new_k = new_k.replace('to_patch.', 'to_patch_embedding.', 1)
+            
+            # 3.5. fn.scope.pos_emb -> fn.cope.pos_emb (ViTSCoPE分类模型格式)
+            # detection 使用 AttentionSCoPE，内部使用 cope 而不是 scope
+            if 'fn.scope.pos_emb' in new_k:
+                new_k = new_k.replace('fn.scope.pos_emb', 'fn.cope.pos_emb')
+            
+            # 4. attn.qkv -> fn.to_qkv, attn.proj -> fn.to_out (ViTCoPE分类模型格式)
+            # 这些在 PreNorm 内部，需要匹配 PreNorm 的结构
+            # detection 使用: transformer_blocks.X.0.fn.to_qkv
+            # 分类使用: blocks.X.attn.qkv
+            # 映射规则: blocks.X.attn.qkv -> transformer_blocks.X.0.fn.to_qkv
+            if 'attn.qkv' in new_k:
+                new_k = new_k.replace('attn.qkv', '0.fn.to_qkv')
+            elif 'attn.proj' in new_k:
+                new_k = new_k.replace('attn.proj', '0.fn.to_out')
+            
+            # 5. mlp.fc1 -> fn.net.0, mlp.fc2 -> fn.net.3 (ViTCoPE分类模型格式)
+            # blocks.X.mlp.fc1 -> transformer_blocks.X.1.fn.net.0
+            if 'mlp.fc1' in new_k:
+                new_k = new_k.replace('mlp.fc1', '1.fn.net.0')
+            elif 'mlp.fc2' in new_k:
+                new_k = new_k.replace('mlp.fc2', '1.fn.net.3')
+            
+            # 6. norm1 -> 0.norm, norm2 -> 1.norm (ViTCoPE分类模型格式)
+            if 'norm1' in new_k:
+                new_k = new_k.replace('norm1', '0.norm')
+            elif 'norm2' in new_k:
+                new_k = new_k.replace('norm2', '1.norm')
+            
+            # 7. cope_emb.pos_table -> 跳过，因为分类模型使用全局 CoPE，检测模型使用每层独立的 CoPE
+            # CoPE 位置编码可以在检测任务中重新训练，所以跳过不影响
+            if 'cope_emb' in new_k:
+                skipped_keys.append(k)
+                continue
             
             # 重命名为检测模型的backbone前缀
             new_key = f'backbone.{new_k}'
@@ -494,9 +543,22 @@ class DetectionTask:
         print(f"✅ Loaded {len(pretrained_dict_filtered)} pretrained layers")
         print(f"   Skipped {len(skipped_keys)} classification layers (mlp_head, cls_token)")
         print(f"   Unmatched: {len(unmatched_keys)} layers")
-        if len(unmatched_keys) > 0 and len(unmatched_keys) <= 5:
-            print(f"   Unmatched keys: {unmatched_keys[:5]}")
+        if len(unmatched_keys) > 0:
+            print(f"   Unmatched keys (前10个):")
+            for i, uk in enumerate(unmatched_keys[:10]):
+                print(f"     {i+1:2d}. {uk}")
+            if len(unmatched_keys) > 10:
+                print(f"     ... 还有 {len(unmatched_keys) - 10} 个")
         print(f"   Total model layers: {len(model_dict)}")
+        
+        # 如果匹配的层数太少，打印一些示例键名用于调试
+        if len(pretrained_dict_filtered) == 0 and len(backbone_dict) > 0:
+            print(f"\\n⚠️  调试信息: 预训练键名示例 (前5个):")
+            for i, k in enumerate(list(backbone_dict.keys())[:5]):
+                print(f"     {i+1}. {k}")
+            print(f"\\n⚠️  检测模型键名示例 (前5个):")
+            for i, k in enumerate([k for k in model_dict.keys() if k.startswith('backbone.')][:5]):
+                print(f"     {i+1}. {k}")
     
     def train(self):
         """开始训练"""

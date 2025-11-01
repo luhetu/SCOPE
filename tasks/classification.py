@@ -34,10 +34,8 @@ class ClassificationTask:
                 mlp_dim=args.mlp_dim
             )
         elif args.model == 'vitcope':
-            from models.vitcope import ViTcope
-            # 使用 dim_head 参数（如果有），否则默认为 64
-            dim_head = getattr(args, 'dim_head', 64)
-            self.net = ViTcope(
+            from models.vitcope import ViTCoPE
+            self.net = ViTCoPE(
                 image_size=args.size,
                 patch_size=args.patch,
                 num_classes=self.num_classes,
@@ -45,10 +43,8 @@ class ClassificationTask:
                 depth=args.depth,
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
-                dim_head=dim_head,
-                pool='mean',
-                dropout=0.1,
-                emb_dropout=0.1
+                drop=0.1,
+                emb_drop=0.1
             )
         elif args.model == 'vitscope':
             from models.vitscope_embed import ViTScope
@@ -200,7 +196,8 @@ class ClassificationTask:
     # ------------------------------------------------------- #
     def save_checkpoint(self, acc, epoch, best=False):
         os.makedirs('checkpoint', exist_ok=True)
-        filename = f"checkpoint/{self.args.model}_{'best' if best else 'last'}.pth"
+        task = self.args.task or 'cls'  # 默认为 cls
+        filename = f"checkpoint/{self.args.model}_{task}_{'best' if best else 'last'}.pth"
         state = {
             'model': self.net.state_dict(),
             'optimizer': self.optimizer.state_dict(),

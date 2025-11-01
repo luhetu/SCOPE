@@ -4,22 +4,22 @@ model: vitscope
 
 # 数据配置
 data_dir: ./datasets/coco
-bs: 4
-pretrained: null  # 预训练权重路径，例如: ./checkpoint/vitscope_best.pth
-img_scale: (512, 512)  # 降低分辨率以支持大batch
+bs: 2
+pretrained: ./checkpoint/vitscope_best.pth  # 预训练权重路径
+img_scale: (512, 512)  # 平衡分辨率
 
-# ViT+SCoPE 配置 (Tiny)
+# ViT+SCoPE 配置 (匹配预训练模型)
 size: 224
-patch: 16
-dim: 192
+patch: 32
+dim: 384
 depth: 12
-heads: 3
-mlp_dim: 768
+heads: 6
+mlp_dim: 1536
 dim_head: 64
 
 # 训练配置
 n_epochs: 12
-lr: 2e-4  # bs=4, 学习率相应调整
+lr: 1e-4  # bs=2, 标准学习率
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05

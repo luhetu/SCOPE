@@ -15,5 +15,5 @@ min_lr: 1e-5
 warmup_epochs: 2
 opt: adamw
 amp: true
-aug: true
+aug: false             # 关闭RandAugment减轻CPU负担
 nowandb: false
