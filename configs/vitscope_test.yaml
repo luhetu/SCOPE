@@ -1,0 +1,24 @@
+# configs/vitscope_test.yaml - 快速性能测试配置
+task: cls
+model: vitscope
+data_dir: /home2/dnrx52/vitcope
+bs: 768                # 测试batch size
+num_workers: 4
+size: 224
+n_epochs: 1            # 只跑1个epoch测试
+patch: 32
+dim: 384
+depth: 12
+heads: 6
+mlp_dim: 1536
+dim_head: 64
+lr: 9e-4
+min_lr: 3e-5
+warmup_epochs: 0       # 测试时不需要warmup
+opt: adamw
+amp: true
+aug: false             # 关闭数据增强加速
+nowandb: true          # 测试时不用wandb
+
+
+

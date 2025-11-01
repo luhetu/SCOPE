@@ -1,0 +1,24 @@
+# configs/vitscope_bs2048.yaml - 超大batch size测试
+task: cls
+model: vitscope
+data_dir: /home2/dnrx52/vitcope
+bs: 2048               # 8倍于原始256
+num_workers: 4
+size: 224
+n_epochs: 100
+patch: 32
+dim: 384
+depth: 12
+heads: 6
+mlp_dim: 1536
+dim_head: 64
+lr: 2.4e-3             # 8倍学习率 (3e-4 * 8)
+min_lr: 8e-5
+warmup_epochs: 10      # 超大batch size需要更长warmup
+opt: adamw
+amp: false
+aug: false
+nowandb: false
+
+
+

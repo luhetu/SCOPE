@@ -1,0 +1,22 @@
+# configs/vitscope_gpu12.yaml - 专门为GPU12 (A100 80GB) 优化
+task: cls
+model: vitscope
+data_dir: /home2/dnrx52/vitcope
+bs: 768                # 平衡显存和数据加载速度
+num_workers: 4         # 集群限制为4
+size: 224
+n_epochs: 100
+patch: 32
+dim: 384
+depth: 12
+heads: 6
+mlp_dim: 1536
+dim_head: 64
+lr: 9e-4               # 3倍学习率 (3e-4 * 3)
+min_lr: 2e-5
+warmup_epochs: 2
+opt: adamw
+amp: true
+aug: false  # 暂时关闭RandAugment，减少CPU负担
+nowandb: false
+

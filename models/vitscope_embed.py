@@ -12,8 +12,8 @@ def pair(t):
 # ————————————————
 # CNNGate + SCoPE 模块：动态位置偏移（Soft版本）
 # ————————————————
-class CNNGateV2(nn.Module):
-    """CNN-based gating for position encoding"""
+class HKPool(nn.Module):
+    """HK pool for position encoding"""
     def __init__(self):
         super().__init__()
         self.global_avgpool = nn.AdaptiveAvgPool2d(1)
@@ -30,26 +30,33 @@ class CNNGateV2(nn.Module):
         # 混合池化
         x = self.max4(x)
         x = self.max4(x)
-        x = self.max2(x)
-        
+        # x = self.max2(x)
+        #442 for size 256 patch 32
+        #44 for size 224 patch 16
         # 展平
         x = x.mean(dim=1)
         return x.flatten(1)
 
 class SCoPE(nn.Module):
-    """Soft CoPE: 动态位置偏移（Embedding层版本）"""
-    def __init__(self, npos_max, dim_head):
+    """Soft CoPE: 动态位置偏移（Embedding层版本，融合门控）"""
+    def __init__(self, npos_max, dim_head, alpha: float = 0.1, tau: float = 1.0):
         super().__init__()
         self.npos_max = npos_max
         self.dim_head = dim_head
+        self.alpha = float(alpha)
+        self.tau = float(tau)
         self.pos_emb = nn.Parameter(torch.zeros(1, dim_head, npos_max))
         nn.init.xavier_uniform_(self.pos_emb)
 
     def forward(self, q, attn_logits):
         # q:           [B, H, N, D_head]
         # attn_logits: [B, H, N, N]
-        # Soft gating
-        gate = torch.sigmoid(attn_logits.mean(dim=-1))  # [B, H, N]
+        # FusedGate = CoPEGate + (1+alpha) * (HKGate - CoPEGate)
+        # CoPEGate：与 vitcope.py 一致，基于内容（query 向量）
+        copegate = torch.sigmoid(q.mean(dim=-1))                           # [B, H, N]
+        hk_prob = torch.softmax(attn_logits / self.tau, dim=-1)            # [B, H, N, N]
+        hkgate = hk_prob.max(dim=-1).values                                 # [B, H, N]
+        gate = copegate + (1.0 + self.alpha) * (hkgate - copegate)          # [B, H, N]
         # Dynamic position
         pos = gate.flip(-1).cumsum(dim=-1).flip(-1)
         pos = pos.clamp(0, self.npos_max-1)

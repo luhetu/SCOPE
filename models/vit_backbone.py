@@ -313,8 +313,8 @@ class AttentionCoPE(nn.Module):
         return self.to_out(out)
 
 
-class CNNGateV2(nn.Module):
-    """CNN-based gating mechanism"""
+class HKPool(nn.Module):
+    """HK pool mechanism"""
     def __init__(self):
         super().__init__()
         self.global_avgpool = nn.AdaptiveAvgPool2d(1)
@@ -334,12 +334,13 @@ class CNNGateV2(nn.Module):
 
 
 class AttentionSCoPE(nn.Module):
-    """Attention with SCoPE (Soft CoPE with CNN gating)"""
-    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.):
+    """Attention with SCoPE (CoPE base + HKGate fusion)"""
+    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0., tau: float = 1.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.heads = heads
         self.scale = dim_head ** -0.5
+        self.tau = float(tau)
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
         self.cope = CoPE(npos_max=num_patches, dim_head=dim_head)
         self.alpha = nn.Parameter(torch.tensor(0.1))
@@ -348,15 +349,17 @@ class AttentionSCoPE(nn.Module):
             nn.Dropout(dropout)
         )
 
-    def forward(self, x, cnn_feat):
+    def forward(self, x, cnn_feat=None):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         offset_raw = self.cope(q, dots)
-        cope_gate = torch.sigmoid(dots.mean(dim=-1))
-        cnn_gate = cnn_feat.unsqueeze(1).expand(-1, self.heads, -1)
-        fused_gate = cope_gate + (1 + self.alpha) * (cnn_gate - cope_gate)
-        fused_gate = torch.sigmoid(fused_gate)
+        # 内容驱动的 CoPEGate（与 vitcope/vitscope_embed 对齐）
+        cope_gate = torch.sigmoid(q.mean(dim=-1))                 # [B, H, N]
+        # HKGate 基于注意力分布
+        hk_prob = torch.softmax(dots / self.tau, dim=-1)          # [B, H, N, N]
+        hk_gate = hk_prob.max(dim=-1).values                      # [B, H, N]
+        fused_gate = cope_gate + (1 + self.alpha) * (hk_gate - cope_gate)
         offset = offset_raw * fused_gate.unsqueeze(-1)
         q_new = q + offset
         dots_new = torch.matmul(q_new, k.transpose(-1, -2)) * self.scale
@@ -512,7 +515,7 @@ class ViTSCoPEBackbone(nn.Module):
         self.dropout = nn.Dropout(emb_dropout)
         
         # CNN Gate
-        self.cnn_gate = CNNGateV2()
+        self.hk_pool = HKPool()
         
         # Transformer blocks with SCoPE
         self.transformer_blocks = nn.ModuleList([])
@@ -542,7 +545,7 @@ class ViTSCoPEBackbone(nn.Module):
         b, c, h, w = x.shape
         
         # CNN gating
-        cnn_feat = self.cnn_gate(x)  # (B, 64)
+        hk_feat = self.hk_pool(x)  # (B, 64)
         
         patches = self.to_patch_embedding(x)
         cls_tokens = self.cls_token.expand(b, -1, -1)
@@ -563,7 +566,7 @@ class ViTSCoPEBackbone(nn.Module):
         
         outs = []
         for i, (attn, ff) in enumerate(self.transformer_blocks):
-            x = attn(x, cnn_feat) + x  # Pass CNN features to attention
+            x = attn(x, hk_feat) + x  # Pass HK features to attention
             x = ff(x) + x
             
             if i in self.out_indices:

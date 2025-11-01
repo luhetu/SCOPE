@@ -1,0 +1,24 @@
+# configs/vitscope_bs1536.yaml - 平衡batch size
+task: cls
+model: vitscope
+data_dir: /home2/dnrx52/vitcope
+bs: 1536               # 6倍于原始256
+num_workers: 4
+size: 224
+n_epochs: 100
+patch: 32
+dim: 384
+depth: 12
+heads: 6
+mlp_dim: 1536
+dim_head: 64
+lr: 1.8e-3             # 6倍学习率 (3e-4 * 6)
+min_lr: 6e-5
+warmup_epochs: 8       # 适中的warmup
+opt: adamw
+amp: true
+aug: true
+nowandb: false
+
+
+
