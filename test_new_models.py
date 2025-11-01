@@ -77,7 +77,7 @@ def main():
     
     # ==================== 2. ViTSCoPE (Embedding层) ==================== #
     try:
-        from models.vitscope_embed import ViTScope
+        from models.vitscope import ViTScope
         results['vitscope'] = test_model(
             'ViTSCoPE (Embedding层)',
             ViTScope,
@@ -94,7 +94,7 @@ def main():
             }
         )
     except ImportError as e:
-        print(f"\n❌ vitscope_embed.py 导入失败: {e}")
+        print(f"\n❌ vitscope.py 导入失败: {e}")
         results['vitscope'] = False
     
     # ==================== 总结 ==================== #

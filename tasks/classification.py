@@ -47,7 +47,7 @@ class ClassificationTask:
                 emb_drop=0.1
             )
         elif args.model == 'vitscope':
-            from models.vitscope_embed import ViTScope
+            from models.vitscope import ViTScope
             # 使用 dim_head 参数（如果有），否则默认为 64
             dim_head = getattr(args, 'dim_head', 64)
             self.net = ViTScope(
@@ -58,8 +58,8 @@ class ClassificationTask:
                 depth=args.depth,
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
-                dim_head=dim_head,
-                pool='mean'
+                dim_head=dim_head
+                # 注意：新版本强制使用 CLS Token，无 pool 参数
             )
         elif args.model == 'vitscope_old':
             from models.vitscope import ViTScope

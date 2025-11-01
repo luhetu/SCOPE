@@ -8,13 +8,13 @@ bs: 2
 pretrained: ./checkpoint/vit-16-imagenet-1k-original-ckpt.t7
 img_scale: (512, 512)  # 平衡分辨率
 
-# ViT 配置
+# ViT 配置 (Tiny)
 size: 224
-patch: 32
-dim: 384
-depth: 12
-heads: 6
-mlp_dim: 1536
+patch: 16  # ViT-Tiny 配置
+dim: 192   # ViT-Tiny 配置
+depth: 12  # ViT-Tiny 配置
+heads: 3   # ViT-Tiny 配置
+mlp_dim: 768  # ViT-Tiny 配置
 dim_head: 64
 
 # 训练配置

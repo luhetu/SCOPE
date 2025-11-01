@@ -4,15 +4,15 @@ data_dir: /home/hetu/ImageNet
 bs: 256
 size: 224
 n_epochs: 100
-patch: 32
-dim: 384
-depth: 12
-heads: 6
-mlp_dim: 1536
+patch: 16  # ViT-Tiny 配置
+dim: 192   # ViT-Tiny 配置
+depth: 12  # ViT-Tiny 配置
+heads: 3   # ViT-Tiny 配置
+mlp_dim: 768  # ViT-Tiny 配置
 lr: 3e-4
 min_lr: 1e-5
 warmup_epochs: 2
 opt: adamw
 amp: true
-aug: true
+aug: false
 nowandb: false

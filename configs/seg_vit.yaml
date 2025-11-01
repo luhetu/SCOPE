@@ -6,13 +6,13 @@ model: vit
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
 bs: 1
 
-# ViT 配置
+# ViT 配置 (Tiny)
 size: 512
-patch: 32
-dim: 384
-depth: 12
-heads: 6
-mlp_dim: 1536
+patch: 16  # ViT-Tiny 配置
+dim: 192   # ViT-Tiny 配置
+depth: 12  # ViT-Tiny 配置
+heads: 3   # ViT-Tiny 配置
+mlp_dim: 768  # ViT-Tiny 配置
 dim_head: 64
 
 # 训练配置
