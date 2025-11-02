@@ -35,6 +35,8 @@ class ClassificationTask:
             )
         elif args.model == 'vitcope':
             from models.vitcope import ViTCoPE
+            # 计算 mlp_ratio：mlp_dim / dim
+            mlp_ratio = args.mlp_dim / args.dim if hasattr(args, 'mlp_dim') and args.mlp_dim else 4.0
             self.net = ViTCoPE(
                 image_size=args.size,
                 patch_size=args.patch,
@@ -42,9 +44,9 @@ class ClassificationTask:
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
-                mlp_dim=args.mlp_dim,
-                drop=0.1,
-                emb_drop=0.1
+                mlp_ratio=mlp_ratio,
+                dropout=0.1,
+                emb_dropout=0.1
             )
         elif args.model == 'vitscope':
             from models.vitscope import ViTScope
