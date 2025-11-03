@@ -35,8 +35,10 @@ class ClassificationTask:
             )
         elif args.model == 'vitcope':
             from models.vitcope import ViTCoPE
-            # 计算 mlp_ratio：mlp_dim / dim
-            mlp_ratio = args.mlp_dim / args.dim if hasattr(args, 'mlp_dim') and args.mlp_dim else 4.0
+            # 获取 mlp_dim（新版本直接使用 mlp_dim，不再需要 mlp_ratio）
+            mlp_dim = args.mlp_dim if hasattr(args, 'mlp_dim') and args.mlp_dim else args.dim * 4
+            # 获取 dim_head 参数（如果有），否则默认为 dim // heads
+            dim_head = getattr(args, 'dim_head', args.dim // args.heads) if hasattr(args, 'heads') else 64
             self.net = ViTCoPE(
                 image_size=args.size,
                 patch_size=args.patch,
@@ -44,7 +46,8 @@ class ClassificationTask:
                 dim=args.dim,
                 depth=args.depth,
                 heads=args.heads,
-                mlp_ratio=mlp_ratio,
+                dim_head=dim_head,
+                mlp_dim=mlp_dim,
                 dropout=0.1,
                 emb_dropout=0.1
             )
