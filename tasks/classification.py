@@ -95,19 +95,22 @@ class ClassificationTask:
 
         self.net = self.net.to(self.device)
         
+        # 自动检测 NCC 环境并设置 num_workers
+        num_workers = 6 if 'SLURM_JOB_ID' in os.environ else 4
+        
         # 根据数据集类型加载数据
         dataset_name = getattr(args, 'dataset', 'imagenet')
         if dataset_name == 'cifar10':
             self.trainloader, self.valloader = build_cifar10_loader(
-                args.data_dir, args.size, args.bs, 4, args.aug
+                args.data_dir, args.size, args.bs, num_workers, args.aug
             )
         elif dataset_name == 'cifar100':
             self.trainloader, self.valloader = build_cifar100_loader(
-                args.data_dir, args.size, args.bs, 4, args.aug
+                args.data_dir, args.size, args.bs, num_workers, args.aug
             )
         else:  # imagenet or default
             self.trainloader, self.valloader = build_imagenet_loader(
-                args.data_dir, args.size, args.bs, 4, args.aug
+                args.data_dir, args.size, args.bs, num_workers, args.aug
             )
 
         # ------------------ 优化器与损失函数 ------------------ #

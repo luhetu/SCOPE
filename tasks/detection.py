@@ -26,6 +26,9 @@ class DetectionTask:
         self.args = args
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
+        print(f"\n🔧 Detection Task Init")
+        print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
+        
         # 构建 MMDetection 配置
         self.cfg = self._build_mmdet_config()
         
@@ -42,7 +45,10 @@ class DetectionTask:
         
         # 加载预训练权重（如果提供）
         if hasattr(args, 'pretrained') and args.pretrained:
+            print(f"\n🔧 Loading pretrained weights: {args.pretrained}")
             self._load_pretrained_backbone(args.pretrained)
+        else:
+            print(f"⚠️  Training from scratch (no pretrained weights)")
         
         # 构建数据集
         self.datasets = [build_dataset(self.cfg.data.train)]
@@ -127,14 +133,13 @@ class DetectionTask:
             ]
         )
         
-        # ==================== 进度条配置 ==================== #
-        # 检查是否使用 WandB
+        # ==================== 进度条和 WandB 配置 ==================== #
         use_wandb = WANDB_AVAILABLE and not args.nowandb
         
         cfg.custom_hooks = [
             dict(type='NumClassCheckHook'),
             dict(type='ProgressBarHook'),  # 添加进度条
-            dict(type='WandBLoggerHook', interval=1, use_wandb=use_wandb)  # WandB 指标记录
+            dict(type='WandBLoggerHook', interval=100, use_wandb=use_wandb)  # WandB 记录训练和评估指标
         ]
         
         # ==================== 评估配置 ==================== #
@@ -149,11 +154,15 @@ class DetectionTask:
         cfg.dist_params = dict(backend='nccl')
         cfg.log_level = 'INFO'
         cfg.work_dir = f'./work_dirs/{args.model}_maskrcnn'
-        cfg.load_from = None
+        cfg.load_from = None  # 不使用 MMDet 自动加载
         cfg.resume_from = None
         cfg.workflow = [('train', 1)]
         cfg.gpu_ids = range(1)
         cfg.seed = getattr(args, 'seed', None)
+        
+        # 确保不自动加载
+        print(f"[DEBUG] Detection cfg.load_from = {cfg.load_from}")
+        print(f"[DEBUG] Detection model.type = {cfg.model.get('type', 'NOT SET')}")
         
         return cfg
     
@@ -375,6 +384,15 @@ class DetectionTask:
         """构建数据配置"""
         args = self.args
         
+        # 获取图像分辨率（支持列表/元组/单个值）
+        if hasattr(args, 'img_scale'):
+            if isinstance(args.img_scale, (tuple, list)):
+                img_scale = tuple(args.img_scale)  # 确保是元组
+            else:
+                img_scale = (args.img_scale, args.img_scale)
+        else:
+            img_scale = (1333, 800)  # 默认 COCO 分辨率
+        
         # 图像归一化
         img_norm_cfg = dict(
             mean=[123.675, 116.28, 103.53],
@@ -386,7 +404,7 @@ class DetectionTask:
         train_pipeline = [
             dict(type='LoadImageFromFile'),
             dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
-            dict(type='Resize', img_scale=(1333, 800), keep_ratio=True),
+            dict(type='Resize', img_scale=img_scale, keep_ratio=True),
             dict(type='RandomFlip', flip_ratio=0.5),
             dict(type='Normalize', **img_norm_cfg),
             dict(type='Pad', size_divisor=32),
@@ -399,7 +417,7 @@ class DetectionTask:
             dict(type='LoadImageFromFile'),
             dict(
                 type='MultiScaleFlipAug',
-                img_scale=(1333, 800),
+                img_scale=img_scale,
                 flip=False,
                 transforms=[
                     dict(type='Resize', keep_ratio=True),
@@ -440,23 +458,36 @@ class DetectionTask:
     def _load_pretrained_backbone(self, pretrained_path):
         """加载分类任务预训练的backbone权重"""
         import os
-        if not os.path.exists(pretrained_path):
-            print(f"⚠️  Pretrained weights not found: {pretrained_path}")
-            print("   Skipping pretrained loading, training from scratch...")
-            return
+        print(f"\n{'='*60}")
+        print(f"🔧 PRETRAINED LOADING DEBUG")
+        print(f"{'='*60}")
+        print(f"📦 Pretrained path: {pretrained_path}")
+        print(f"   File exists: {os.path.exists(pretrained_path)}")
         
-        print(f"📦 Loading pretrained backbone from: {pretrained_path}")
+        if not os.path.exists(pretrained_path):
+            print(f"⚠️  Pretrained weights not found!")
+            print(f"   Training from scratch...")
+            print(f"{'='*60}\n")
+            return
         
         # 加载分类模型的checkpoint
         checkpoint = torch.load(pretrained_path, map_location='cpu')
+        print(f"✅ Checkpoint loaded")
+        print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
         
         # 获取模型权重（支持不同的保存格式）
         if 'model' in checkpoint:
             pretrained_dict = checkpoint['model']
+            print(f"   Using checkpoint['model']")
         elif 'state_dict' in checkpoint:
             pretrained_dict = checkpoint['state_dict']
+            print(f"   Using checkpoint['state_dict']")
         else:
             pretrained_dict = checkpoint
+            print(f"   Using checkpoint directly")
+        
+        print(f"   Total pretrained keys: {len(pretrained_dict)}")
+        print(f"   Sample keys: {list(pretrained_dict.keys())[:3]}")
         
         # 过滤并重命名权重，只加载backbone部分
         backbone_dict = {}
@@ -535,30 +566,35 @@ class DetectionTask:
             else:
                 unmatched_keys.append(f"{k} (not in model)")
         
+        print(f"\n📊 Matching results:")
+        print(f"   After mapping: {len(backbone_dict)} keys")
+        print(f"   Matched: {len(matched_keys)} keys")
+        print(f"   Unmatched: {len(unmatched_keys)} keys")
+        
+        if len(matched_keys) > 0:
+            print(f"\n✅ Sample matched keys (first 3):")
+            for k in list(matched_keys)[:3]:
+                print(f"     {k}")
+        
+        if len(unmatched_keys) > 0 and len(unmatched_keys) <= 10:
+            print(f"\n⚠️  Unmatched keys:")
+            for uk in unmatched_keys[:10]:
+                print(f"     {uk}")
+        
         # 只更新存在且形状匹配的键
         pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in matched_keys}
         model_dict.update(pretrained_dict_filtered)
         self.model.load_state_dict(model_dict, strict=False)
         
-        print(f"✅ Loaded {len(pretrained_dict_filtered)} pretrained layers")
-        print(f"   Skipped {len(skipped_keys)} classification layers (mlp_head, cls_token)")
-        print(f"   Unmatched: {len(unmatched_keys)} layers")
-        if len(unmatched_keys) > 0:
-            print(f"   Unmatched keys (前10个):")
-            for i, uk in enumerate(unmatched_keys[:10]):
-                print(f"     {i+1:2d}. {uk}")
-            if len(unmatched_keys) > 10:
-                print(f"     ... 还有 {len(unmatched_keys) - 10} 个")
-        print(f"   Total model layers: {len(model_dict)}")
+        match_rate = 100*len(pretrained_dict_filtered)/max(1,len(backbone_dict))
+        print(f"\n✅ FINAL: Loaded {len(pretrained_dict_filtered)}/{len(backbone_dict)} layers ({match_rate:.1f}%)")
         
-        # 如果匹配的层数太少，打印一些示例键名用于调试
-        if len(pretrained_dict_filtered) == 0 and len(backbone_dict) > 0:
-            print(f"\\n⚠️  调试信息: 预训练键名示例 (前5个):")
-            for i, k in enumerate(list(backbone_dict.keys())[:5]):
-                print(f"     {i+1}. {k}")
-            print(f"\\n⚠️  检测模型键名示例 (前5个):")
-            for i, k in enumerate([k for k in model_dict.keys() if k.startswith('backbone.')][:5]):
-                print(f"     {i+1}. {k}")
+        if match_rate < 50:
+            print(f"\n⚠️  WARNING: Low match rate! Checking key format mismatch...")
+            print(f"   Sample backbone_dict key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
+            print(f"   Sample model_dict key: {[k for k in model_dict.keys() if 'backbone' in k][0] if any('backbone' in k for k in model_dict.keys()) else 'NONE'}")
+        
+        print(f"{'='*60}\n")
     
     def train(self):
         """开始训练"""

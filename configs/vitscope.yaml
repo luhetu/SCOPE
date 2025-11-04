@@ -1,19 +1,19 @@
 task: cls
 model: vitscope
-data_dir: /home/hetu/ImageNet
-bs: 128  # 减少 batch size 以避免 OOM（SCoPE 需要创建大的 [B,H,N,N] 张量）
+data_dir: /home2/dnrx52/vitcope
+bs: 256
 size: 224
 n_epochs: 100
-patch: 16  # ViT-Tiny 配置
-dim: 192   # ViT-Tiny 配置
-depth: 12  # ViT-Tiny 配置
-heads: 3   # ViT-Tiny 配置
-mlp_dim: 768  # ViT-Tiny 配置
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
 dim_head: 64
-lr: 1.5e-4  # bs=128，学习率线性缩放（256→128，3e-4→1.5e-4）
+lr: 3e-4
 min_lr: 1e-5
 warmup_epochs: 2
 opt: adamw
 amp: true
-aug: False
+aug: false
 nowandb: false

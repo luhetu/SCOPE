@@ -42,7 +42,7 @@ class CoPE(nn.Module):
         e_c = emb2d.index_select(0, c_idx).view(B,H,N,self.dim_head)
         # 5) interpolate
         offset = e_f * (1 - w) + e_c * w          # [B, H, N, D_head]
-        return offset
+        return offset, gate  # 与 vitscope.py/vit_backbone.py 保持一致
 
 # ————————————————
 # PreNorm & FeedForward
@@ -93,8 +93,8 @@ class Attention(nn.Module):
 
         # raw attention logits
         logits = torch.matmul(q, k.transpose(-1,-2)) * self.scale  # [B,H,N,N]
-        # CoPE offset
-        offset = self.cope(q, logits)                              # [B,H,N,D_head]
+        # CoPE offset（返回两个值）
+        offset, _ = self.cope(q, logits)                           # [B,H,N,D_head]
 
         # apply to q
         q2 = q + offset

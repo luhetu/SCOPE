@@ -26,6 +26,12 @@ class SegmentationTask:
         self.args = args
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
+        print(f"\n🔧 Segmentation Task Init")
+        print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
+        
+        # WandB（需要在构建配置前设置）
+        self.use_wandb = WANDB_AVAILABLE and not args.nowandb
+        
         # 构建 MMSegmentation 配置
         self.cfg = self._build_mmseg_config()
         
@@ -40,11 +46,17 @@ class SegmentationTask:
             test_cfg=self.cfg.get('test_cfg')
         )
         
+        # 加载预训练权重（如果提供）
+        if hasattr(args, 'pretrained') and args.pretrained:
+            print(f"\n🔧 Loading pretrained weights: {args.pretrained}")
+            self._load_pretrained_backbone(args.pretrained)
+        else:
+            print(f"⚠️  Training from scratch (no pretrained weights)")
+        
         # 构建数据集
         self.datasets = [build_dataset(self.cfg.data.train)]
         
-        # WandB
-        self.use_wandb = WANDB_AVAILABLE and not args.nowandb
+        # WandB 初始化
         if self.use_wandb:
             # 统一项目名为数据集名-experiments
             project_name = "ade20k-experiments"
@@ -106,24 +118,38 @@ class SegmentationTask:
             filename_tmpl=f'{model_name}_{task_name}_iter_{{}}.pth'
         )
         
-        # ==================== 日志配置（仅在 epoch 结束时打印）==================== #
+        # ==================== 评估配置 ==================== #
+        cfg.evaluation = dict(
+            interval=2000,  # 每2000 iter评估一次（避免与日志冲突）
+            metric='mIoU',
+            pre_eval=True,
+            save_best='mIoU',
+            classwise=False  # 禁用每类详细输出
+        )
+        
+        # ==================== 日志配置 ==================== #
         cfg.log_config = dict(
-            interval=9999999,  # 设置很大的值，避免频繁打印
+            interval=100,  # 每100 iter记录一次
             hooks=[
                 dict(type='TextLoggerHook', by_epoch=False),
             ]
         )
         
-        # ==================== 进度条配置 ==================== #
+        # 修复评估间隔，避免与日志冲突
+        # 确保评估不在日志记录时进行
+        cfg.evaluation.interval = 2001  # 避免与 100 的倍数冲突
+        
+        # ==================== 进度条和 WandB 配置 ==================== #
         cfg.custom_hooks = [
-            dict(type='SegProgressBarHook')  # 添加进度条（分割专用）
+            dict(type='SegProgressBarHook'),  # 添加进度条（分割专用）
+            dict(type='SimpleWandBHook', use_wandb=self.use_wandb, log_interval=100),  # WandB 记录训练和评估指标
         ]
         
         # ==================== 其他配置 ==================== #
         cfg.dist_params = dict(backend='nccl')
         cfg.log_level = 'INFO'
         cfg.work_dir = f'./work_dirs/{args.model}_upernet'
-        cfg.load_from = None
+        cfg.load_from = None  # 不使用 MMSeg 自动加载
         cfg.gpu_ids = [0]  # 单GPU训练
         cfg.resume_from = None
         cfg.workflow = [('train', 1)]
@@ -276,7 +302,7 @@ class SegmentationTask:
         train_pipeline = [
             dict(type='LoadImageFromFile'),
             dict(type='LoadAnnotations', reduce_zero_label=True),
-            dict(type='Resize', img_scale=(2048, 512), ratio_range=(0.5, 2.0)),
+            dict(type='Resize', img_scale=(args.size * 2, args.size), ratio_range=(0.5, 2.0)),  # 基于 args.size
             dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
             dict(type='RandomFlip', prob=0.5),
             dict(type='PhotoMetricDistortion'),
@@ -290,10 +316,10 @@ class SegmentationTask:
             dict(type='LoadImageFromFile'),
             dict(
                 type='MultiScaleFlipAug',
-                img_scale=(2048, 512),
+                img_scale=(args.size, args.size),  # 使用固定尺寸，避免 ViT patch 尺寸不匹配
                 flip=False,
                 transforms=[
-                    dict(type='Resize', keep_ratio=True),
+                    dict(type='Resize', keep_ratio=False),  # 不保持比例，确保尺寸正确
                     dict(type='RandomFlip'),
                     dict(type='Normalize', **img_norm_cfg),
                     dict(type='ImageToTensor', keys=['img']),
@@ -348,4 +374,119 @@ class SegmentationTask:
         
         if self.use_wandb:
             wandb.finish()
+    
+    def _load_pretrained_backbone(self, pretrained_path):
+        """加载分类任务预训练的backbone权重"""
+        import os
+        print(f"\n{'='*60}")
+        print(f"🔧 PRETRAINED LOADING DEBUG")
+        print(f"{'='*60}")
+        print(f"📦 Pretrained path: {pretrained_path}")
+        print(f"   File exists: {os.path.exists(pretrained_path)}")
+        
+        if not os.path.exists(pretrained_path):
+            print(f"⚠️  Pretrained weights not found!")
+            print(f"   Training from scratch...")
+            print(f"{'='*60}\n")
+            return
+        
+        # 加载分类模型的checkpoint
+        checkpoint = torch.load(pretrained_path, map_location='cpu')
+        print(f"✅ Checkpoint loaded")
+        print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
+        
+        # 获取模型权重（支持不同的保存格式）
+        if 'model' in checkpoint:
+            pretrained_dict = checkpoint['model']
+            print(f"   Using checkpoint['model']")
+        elif 'state_dict' in checkpoint:
+            pretrained_dict = checkpoint['state_dict']
+            print(f"   Using checkpoint['state_dict']")
+        else:
+            pretrained_dict = checkpoint
+            print(f"   Using checkpoint directly")
+        
+        print(f"   Total pretrained keys: {len(pretrained_dict)}")
+        print(f"   Sample keys: {list(pretrained_dict.keys())[:3]}")
+        
+        # 过滤并重命名权重，只加载backbone部分
+        backbone_dict = {}
+        skipped_keys = []
+        for k, v in pretrained_dict.items():
+            # 跳过分类头和 CLS token
+            if 'mlp_head' in k or 'head' in k or 'fc' in k or 'cls_token' in k:
+                skipped_keys.append(k)
+                continue
+            
+            # 键名映射：分类模型 -> 分割模型
+            new_k = k
+            
+            # 1. transformer.layers.X.Y -> transformer_blocks.X.Y
+            new_k = new_k.replace('transformer.layers', 'transformer_blocks')
+            
+            # 2. blocks.X -> transformer_blocks.X
+            if new_k.startswith('blocks.'):
+                new_k = new_k.replace('blocks.', 'transformer_blocks.', 1)
+            
+            # 3. to_patch.1 -> to_patch_embedding.1
+            if new_k.startswith('to_patch.'):
+                new_k = new_k.replace('to_patch.', 'to_patch_embedding.', 1)
+            
+            # 4. fn.scope.pos_emb -> fn.cope.pos_emb (SCoPE模型)
+            if 'fn.scope.pos_emb' in new_k:
+                new_k = new_k.replace('fn.scope.pos_emb', 'fn.cope.pos_emb')
+            
+            # 5. cope_emb 跳过（全局CoPE vs 每层CoPE）
+            if 'cope_emb' in new_k:
+                skipped_keys.append(k)
+                continue
+            
+            # 重命名为分割模型的backbone前缀
+            new_key = f'backbone.{new_k}'
+            backbone_dict[new_key] = v
+        
+        # 加载到分割模型
+        model_dict = self.model.state_dict()
+        
+        # 检查哪些键匹配
+        matched_keys = []
+        unmatched_keys = []
+        for k, v in backbone_dict.items():
+            if k in model_dict:
+                if model_dict[k].shape == v.shape:
+                    matched_keys.append(k)
+                else:
+                    unmatched_keys.append(f"{k} (shape mismatch: {v.shape} vs {model_dict[k].shape})")
+            else:
+                unmatched_keys.append(f"{k} (not in model)")
+        
+        print(f"\n📊 Matching results:")
+        print(f"   After mapping: {len(backbone_dict)} keys")
+        print(f"   Matched: {len(matched_keys)} keys")
+        print(f"   Unmatched: {len(unmatched_keys)} keys")
+        
+        if len(matched_keys) > 0:
+            print(f"\n✅ Sample matched keys (first 3):")
+            for k in list(matched_keys)[:3]:
+                print(f"     {k}")
+        
+        if len(unmatched_keys) > 0 and len(unmatched_keys) <= 10:
+            print(f"\n⚠️  Unmatched keys:")
+            for uk in unmatched_keys[:10]:
+                print(f"     {uk}")
+        
+        # 只更新存在且形状匹配的键
+        pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in matched_keys}
+        model_dict.update(pretrained_dict_filtered)
+        self.model.load_state_dict(model_dict, strict=False)
+        
+        match_rate = 100*len(pretrained_dict_filtered)/max(1,len(backbone_dict))
+        print(f"\n✅ FINAL: Loaded {len(pretrained_dict_filtered)}/{len(backbone_dict)} layers ({match_rate:.1f}%)")
+        
+        if match_rate < 50:
+            print(f"\n⚠️  WARNING: Low match rate! Checking key format mismatch...")
+            print(f"   Sample backbone_dict key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
+            print(f"   Sample model_dict key: {[k for k in model_dict.keys() if 'backbone' in k][0] if any('backbone' in k for k in model_dict.keys()) else 'NONE'}")
+        
+        print(f"{'='*60}\n")
 

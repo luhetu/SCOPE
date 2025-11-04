@@ -93,7 +93,8 @@ class SingleRoIExtractor(BaseRoIExtractor):
             inds = mask.nonzero(as_tuple=False).squeeze(1)
             if inds.numel() > 0:
                 rois_ = rois[inds]
-                roi_feats_t = self.roi_layers[i](feats[i], rois_)
+                # 确保特征张量连续性，避免 RoI Align 报错
+                roi_feats_t = self.roi_layers[i](feats[i].contiguous(), rois_)
                 roi_feats[inds] = roi_feats_t
             else:
                 # Sometimes some pyramid levels will not be used for RoI

@@ -266,24 +266,24 @@ class CoPE(nn.Module):
         nn.init.xavier_uniform_(self.pos_emb)
 
     def forward(self, q, attn_logits):
-        gate = torch.sigmoid(attn_logits.mean(dim=-1))
+        gate = torch.sigmoid(attn_logits.mean(dim=-1))  # [B, H, N]
         pos = gate.flip(-1).cumsum(dim=-1).flip(-1)
-        pos = pos.clamp(0, self.npos_max-1)
+        pos = pos.clamp(min=0, max=self.npos_max-1)
         f = pos.floor().long()
         c = pos.ceil().long()
         w = (pos - f).unsqueeze(-1)
-        emb2d = self.pos_emb[0].transpose(0,1)
+        emb2d = self.pos_emb[0].transpose(0,1)  # [N, D]
         B,H,N = f.shape
         f_idx = f.reshape(-1)
         c_idx = c.reshape(-1)
         e_f = emb2d.index_select(0, f_idx).view(B,H,N,self.dim_head)
         e_c = emb2d.index_select(0, c_idx).view(B,H,N,self.dim_head)
-        offset = e_f * (1 - w) + e_c * w
-        return offset
+        offset = e_f * (1 - w) + e_c * w  # [B, H, N, D]
+        return offset, gate  # 与 vitscope.py/vitcope.py 保持一致，返回 offset 和 gate
 
 
 class AttentionCoPE(nn.Module):
-    """Attention with CoPE"""
+    """Attention with CoPE（CoPE表长随 N 动态匹配）"""
     def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
@@ -293,19 +293,24 @@ class AttentionCoPE(nn.Module):
         self.attend = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.cope = CoPE(npos_max=num_patches, dim_head=dim_head)
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
+        # 先用占位的 CoPE；真正表长在 forward 里按 N 重建
+        self._dim_head = dim_head
+        self._cope = CoPE(npos_max=num_patches, dim_head=dim_head)
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout)) if project_out else nn.Identity()
 
     def forward(self, x):
+        B, N_all, _ = x.shape
+        # 若包含 CLS，这里仍然按你现有的使用方式：把 CLS 也算在 N 里交给 CoPE
+        # 如果你想让 CoPE 只作用于 patch，可在上层传入不含 CLS 的 x
+        if self._cope.npos_max != N_all:
+            self._cope = CoPE(npos_max=N_all, dim_head=self._dim_head)
+
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        logits = torch.matmul(q, k.transpose(-1,-2)) * self.scale
-        offset = self.cope(q, logits)
+        logits = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        offset, _ = self._cope(q, logits)  # offset:[B,H,N,D]
         q2 = q + offset
-        dots = torch.matmul(q2, k.transpose(-1,-2)) * self.scale
+        dots = torch.matmul(q2, k.transpose(-1, -2)) * self.scale
         attn = self.attend(dots)
         attn = self.dropout(attn)
         out = torch.matmul(attn, v)
@@ -313,60 +318,82 @@ class AttentionCoPE(nn.Module):
         return self.to_out(out)
 
 
+
 class HKPool(nn.Module):
-    """HK pool mechanism"""
-    def __init__(self):
+    """HK pool mechanism（自适应到 patch grid，轻量归一化到(0,1)）"""
+    def __init__(self, patch_size=16):
         super().__init__()
+        self.patch_size = patch_size
         self.global_avgpool = nn.AdaptiveAvgPool2d(1)
-        self.max2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.max4 = nn.MaxPool2d(kernel_size=4, stride=4)
         self.alpha = nn.Parameter(torch.tensor(0.1))
+        self.beta  = nn.Parameter(torch.tensor(1.0))
+        self.max4  = nn.MaxPool2d(4, 4)  # 轻量局部聚合；如不想要可去掉
 
     def forward(self, x):
+        # x: [B, C, H, W]
+        B, C, H, W = x.shape
+        # 1) 全局对比增强
         mu = self.global_avgpool(x)
-        delta = x - mu
-        x = x + (1 + self.alpha) * delta
-        x = self.max4(x)
-        x = self.max4(x)
-        x = self.max2(x)
-        x = x.mean(dim=1)
-        return x.flatten(1)
+        x  = x + (1 + self.alpha) * (x - mu)
+        # 2) 可选：一点局部聚合
+        x  = self.max4(x)
+        # 3) 自适应到 patch grid 尺寸
+        h_p = H // self.patch_size
+        w_p = W // self.patch_size
+        x   = torch.nn.functional.adaptive_avg_pool2d(x, (h_p, w_p))
+        # 4) 通道平均 + 展平
+        gate = x.mean(dim=1).flatten(1)   # [B, h_p*w_p]
+        # 5) per-sample 归一化到(0,1)，与 CoPE gate 量纲统一
+        gate = (gate - gate.mean(dim=1, keepdim=True)) / (gate.std(dim=1, keepdim=True) + 1e-5)
+        gate = torch.sigmoid(self.beta * gate)
+        return gate                       # [B, N] in (0,1)
 
 
 class AttentionSCoPE(nn.Module):
-    """Attention with SCoPE (CoPE base + HKGate fusion)"""
-    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0., tau: float = 1.0):
+    """Attention with SCoPE（动态 N；fused = λ*cope + (1-λ)*hk，避免二次sigmoid）"""
+    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
         self.heads = heads
         self.scale = dim_head ** -0.5
-        self.tau = float(tau)
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.cope = CoPE(npos_max=num_patches, dim_head=dim_head)
-        self.alpha = nn.Parameter(torch.tensor(0.1))
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        )
+        self._dim_head = dim_head
+        self._cope = CoPE(npos_max=num_patches, dim_head=dim_head)
+        self.lam  = nn.Parameter(torch.tensor(0.5))  # 学习 λ，做凸组合
+        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x, cnn_feat=None):
+    def forward(self, x, hk_feat):
+        # x: [B, N_all, dim]（包含CLS）
+        # hk_feat: [B, N_patches]（只包含 patch 的 gate，来自 HKPool）
+        B, N_all, _ = x.shape
+        N_patches = N_all - 1
+        assert hk_feat.shape[1] == N_patches, "HKPool 输出长度必须等于 patch 数"
+
+        # 动态重建 CoPE 表长（含 CLS）
+        if self._cope.npos_max != N_all:
+            self._cope = CoPE(npos_max=N_all, dim_head=self._dim_head)
+
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        offset_raw = self.cope(q, dots)
-        # 内容驱动的 CoPEGate（与 vitcope/vitscope_embed 对齐）
-        cope_gate = torch.sigmoid(q.mean(dim=-1))                 # [B, H, N]
-        # HKGate 基于注意力分布
-        hk_prob = torch.softmax(dots / self.tau, dim=-1)          # [B, H, N, N]
-        hk_gate = hk_prob.max(dim=-1).values                      # [B, H, N]
-        fused_gate = cope_gate + (1 + self.alpha) * (hk_gate - cope_gate)
-        offset = offset_raw * fused_gate.unsqueeze(-1)
-        q_new = q + offset
+        offset, cope_gate = self._cope(q, dots)  # offset:[B,H,N_all,D], cope_gate:[B,H,N_all]
+
+        # CLS gate 来自 CoPE 的第 0 列（多头均值）
+        cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)  # [B,1]
+        hk_full = torch.cat([cls_from_cope, hk_feat], dim=1)          # [B, N_all]
+        hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)     # [B,H,N_all]
+
+        # 凸组合融合（保持在(0,1)范围，无需二次sigmoid）
+        lam = torch.sigmoid(self.lam)                                  # (0,1)
+        fused_gate = lam * cope_gate + (1 - lam) * hk_full             # [B,H,N_all]
+
+        q_new = q + offset * fused_gate.unsqueeze(-1)
         dots_new = torch.matmul(q_new, k.transpose(-1, -2)) * self.scale
         attn = torch.softmax(dots_new, dim=-1)
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
+        out = torch.matmul(attn, v)                                    # [B,H,N_all,D]
+        return self.to_out(rearrange(out, 'b h n d -> b n (h d)'))
+
 
 
 class ViTCoPEBackbone(nn.Module):
@@ -509,15 +536,35 @@ class ViTSCoPEBackbone(nn.Module):
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_height, p2=patch_width),
             nn.Linear(patch_dim, dim),
         )
-        
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.dropout = nn.Dropout(emb_dropout)
-        
-        # CNN Gate
-        self.hk_pool = HKPool()
-        
-        # Transformer blocks with SCoPE
+        class HKPool(nn.Module):
+    """HK pool mechanism（自适应到 patch grid，轻量归一化到(0,1)）"""
+    def __init__(self, patch_size=16):
+        super().__init__()
+        self.patch_size = patch_size
+        self.global_avgpool = nn.AdaptiveAvgPool2d(1)
+        self.alpha = nn.Parameter(torch.tensor(0.1))
+        self.beta  = nn.Parameter(torch.tensor(1.0))
+        self.max4  = nn.MaxPool2d(4, 4)  # 轻量局部聚合；如不想要可去掉
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        B, C, H, W = x.shape
+        # 1) 全局对比增强
+        mu = self.global_avgpool(x)
+        x  = x + (1 + self.alpha) * (x - mu)
+        # 2) 可选：一点局部聚合
+        x  = self.max4(x)
+        # 3) 自适应到 patch grid 尺寸
+        h_p = H // self.patch_size
+        w_p = W // self.patch_size
+        x   = torch.nn.functional.adaptive_avg_pool2d(x, (h_p, w_p))
+        # 4) 通道平均 + 展平
+        gate = x.mean(dim=1).flatten(1)   # [B, h_p*w_p]
+        # 5) per-sample 归一化到(0,1)，与 CoPE gate 量纲统一
+        gate = (gate - gate.mean(dim=1, keepdim=True)) / (gate.std(dim=1, keepdim=True) + 1e-5)
+        gate = torch.sigmoid(self.beta * gate)
+        return gate                       # [B, N] in (0,1)
+
         self.transformer_blocks = nn.ModuleList([])
         for _ in range(depth):
             self.transformer_blocks.append(nn.ModuleList([

@@ -3,27 +3,26 @@ task: det
 model: vit
 
 # 数据配置
-data_dir: ./datasets/coco
+data_dir: /home2/dnrx52/copeondet/datasets/coco
 bs: 2
-pretrained: ./checkpoint/vit-16-imagenet-1k-original-ckpt.t7
-img_scale: (512, 512)  # 平衡分辨率
+pretrained: ./checkpoint/vit_pretrained.pth
+img_scale: [1333, 800]  # COCO 标准分辨率（使用列表而非元组）
 
 # ViT 配置 (Tiny)
 size: 224
-patch: 16  # ViT-Tiny 配置
-dim: 192   # ViT-Tiny 配置
-depth: 12  # ViT-Tiny 配置
-heads: 3   # ViT-Tiny 配置
-mlp_dim: 768  # ViT-Tiny 配置
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
 dim_head: 64
 
 # 训练配置
 n_epochs: 12
-lr: 1e-4  # bs=2, 标准学习率
+lr: 5e-5
 min_lr: 1e-6
 warmup_epochs: 1
 weight_decay: 0.05
 opt: adamw
 amp: true
 nowandb: false
-
