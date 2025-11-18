@@ -12,7 +12,7 @@ class ClassificationTask:
         self.args = args
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-        # 根据数据集类型确定类别数
+        # Determine number of classes based on dataset
         dataset_name = getattr(args, 'dataset', 'imagenet')
         if dataset_name == 'cifar10':
             self.num_classes = 10
@@ -21,7 +21,7 @@ class ClassificationTask:
         else:  # imagenet or default
             self.num_classes = 1000
 
-        # ------------------ 模型选择 ------------------ #
+        # ------------------ Model Selection ------------------ #
         if args.model == 'vit':
             from models.vit import ViT
             self.net = ViT(
@@ -35,9 +35,9 @@ class ClassificationTask:
             )
         elif args.model == 'vitcope':
             from models.vitcope import ViTCoPE
-            # 获取 mlp_dim（新版本直接使用 mlp_dim，不再需要 mlp_ratio）
+            # mlp_dim (new version uses mlp_dim directly)
             mlp_dim = args.mlp_dim if hasattr(args, 'mlp_dim') and args.mlp_dim else args.dim * 4
-            # 获取 dim_head 参数（如果有），否则默认为 dim // heads
+            # dim_head parameter (default = dim // heads)
             dim_head = getattr(args, 'dim_head', args.dim // args.heads) if hasattr(args, 'heads') else 64
             self.net = ViTCoPE(
                 image_size=args.size,
@@ -53,7 +53,6 @@ class ClassificationTask:
             )
         elif args.model == 'vitscope':
             from models.vitscope import ViTScope
-            # 使用 dim_head 参数（如果有），否则默认为 64
             dim_head = getattr(args, 'dim_head', 64)
             self.net = ViTScope(
                 image_size=args.size,
@@ -64,7 +63,7 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
                 dim_head=dim_head
-                # 注意：新版本强制使用 CLS Token，无 pool 参数
+                # Note: New version forces CLS token; pool is removed
             )
         elif args.model == 'vitscope_old':
             from models.vitscope import ViTScope
@@ -95,10 +94,10 @@ class ClassificationTask:
 
         self.net = self.net.to(self.device)
         
-        # 自动检测 NCC 环境并设置 num_workers
+        # Auto-detect NCC environment and set workers
         num_workers = 6 if 'SLURM_JOB_ID' in os.environ else 4
         
-        # 根据数据集类型加载数据
+        # Dataset loader
         dataset_name = getattr(args, 'dataset', 'imagenet')
         if dataset_name == 'cifar10':
             self.trainloader, self.valloader = build_cifar10_loader(
@@ -108,39 +107,36 @@ class ClassificationTask:
             self.trainloader, self.valloader = build_cifar100_loader(
                 args.data_dir, args.size, args.bs, num_workers, args.aug
             )
-        else:  # imagenet or default
+        else:  # imagenet
             self.trainloader, self.valloader = build_imagenet_loader(
                 args.data_dir, args.size, args.bs, num_workers, args.aug
             )
 
-        # ------------------ 优化器与损失函数 ------------------ #
-        # Label smoothing 需要 PyTorch >= 1.10
+        # ------------------ Loss & Optimizer ------------------ #
+        # Label smoothing requires PyTorch >= 1.10
         pytorch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
         if pytorch_version >= (1, 10):
             self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         else:
             self.criterion = nn.CrossEntropyLoss()
+
         self.optimizer = build_optimizer(self.net, args)
         self.scheduler = build_scheduler(self.optimizer, args)
         self.scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
 
-        # ------------------ 训练状态 ------------------ #
+        # ------------------ Training State ------------------ #
         self.best_acc = 0.0
         self.start_epoch = 0
         self.start_time = time.time()
         
-        # ------------------ 断点续训 ------------------ #
+        # ------------------ Resume Training ------------------ #
         if hasattr(args, 'resume') and args.resume:
             self.load_checkpoint(args.resume)
 
         # ------------------ WandB ------------------ #
         self.use_wandb = not args.nowandb
         if self.use_wandb:
-            # 根据数据集统一项目名
-            dataset_name = getattr(args, 'dataset', 'imagenet')
             project_name = f"{dataset_name}-experiments"
-            
-            # 运行名称包含模型、数据集和关键参数
             watermark = f"{args.model}_{dataset_name}_size{args.size}_patch{args.patch}_dim{args.dim}_depth{args.depth}_lr{args.lr}"
             
             wandb.init(project=project_name, name=watermark)
@@ -155,7 +151,6 @@ class ClassificationTask:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad(set_to_none=True)
 
-            # 混合精度训练
             with torch.amp.autocast('cuda', enabled=self.args.amp):
                 outputs = self.net(inputs)
                 loss = self.criterion(outputs, targets)
@@ -204,7 +199,7 @@ class ClassificationTask:
     # ------------------------------------------------------- #
     def save_checkpoint(self, acc, epoch, best=False):
         os.makedirs('checkpoint', exist_ok=True)
-        task = self.args.task or 'cls'  # 默认为 cls
+        task = self.args.task or 'cls'
         filename = f"checkpoint/{self.args.model}_{task}_{'best' if best else 'last'}.pth"
         state = {
             'model': self.net.state_dict(),
@@ -219,7 +214,7 @@ class ClassificationTask:
         print(f"💾 Saved: {filename} (acc={acc:.2f}%)")
     
     def load_checkpoint(self, checkpoint_path):
-        """从 checkpoint 恢复训练"""
+        """Restore training from checkpoint"""
         if not os.path.exists(checkpoint_path):
             print(f"⚠️  Checkpoint not found: {checkpoint_path}")
             return
@@ -254,13 +249,11 @@ class ClassificationTask:
             val_loss, val_acc = self.validate(epoch)
             self.scheduler.step()
 
-            # 打印日志
             print(f"[Epoch {epoch:03d}] "
                   f"TrainAcc={train_acc:.2f}% | ValAcc={val_acc:.2f}% | "
                   f"LR={self.optimizer.param_groups[0]['lr']:.6f} | "
                   f"Time={(time.time()-t0)/60:.2f} min")
 
-            # 记录 WandB
             if self.use_wandb:
                 wandb.log({
                     'epoch': epoch,
@@ -272,7 +265,6 @@ class ClassificationTask:
                     'epoch_time_min': (time.time()-t0)/60
                 })
 
-            # 保存 best/last 模型
             self.save_checkpoint(val_acc, epoch, best=False)
             if val_acc > self.best_acc:
                 self.best_acc = val_acc

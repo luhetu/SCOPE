@@ -1,27 +1,27 @@
-# configs/seg_vit.yaml - ViT + UPerNet for ADE20K
+# configs/seg_vit.yaml - ViT + UPerNet for ADE20K (80k iterations)
 task: seg
 model: vit
 
-# 数据配置
+# Data configuration
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
-bs: 2
-pretrained: ./checkpoint/vit_pretrained.pth
+bs: 8
+pretrained: ./checkpoint/vit_pretrained.pth  # Uniformly use custom ViT pre-training
 
-# ViT 配置 (Tiny)
-size: 512
+# ViT configuration (Tiny)
+size: 512  # 🔧 Fix: reduced from 768 to 512, more stable and memory-friendly (768 uses 12, 512 can use 12)
 patch: 16
 dim: 192
 depth: 12
 heads: 3
 mlp_dim: 768
-dim_head: 64
+dim_head: 64  # 🔧 Fix: dim_head = dim / heads = 192 / 3 = 64
 
-# 训练配置
-n_epochs: 80
-lr: 6e-5  # 降低学习率（bs=2，避免训练不稳定）
-min_lr: 1e-6
-warmup_epochs: 1
-weight_decay: 0.01
+# Training configuration (80k iterations)
+n_epochs: 32         # 32 × 2526 ≈ 80K iterations (bs=8)
+lr: 3e-5             # lr scaled by bs=8: 6e-5 × (8 / 16)
+min_lr: 0            # Polynomial decay to 0
+warmup_epochs: 0.9   # ➜ 1515 iterations
+weight_decay: 0.01   # Paper standard
 opt: adamw
 amp: false
 nowandb: false

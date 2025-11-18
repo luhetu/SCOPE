@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-目标检测任务
-基于 MMDetection 框架，支持 Swin/ViT/CoPE/SCoPE 作为 Backbone
+"""Object Detection Task
+MMDetection  as Backbone
 """
 import os
 import time
@@ -13,7 +12,7 @@ from mmdet.datasets import build_dataset
 from mmdet.models import build_detector
 from mmdet.utils import get_root_logger
 
-# WandB 可选依赖
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -29,42 +28,40 @@ class DetectionTask:
         print(f"\n🔧 Detection Task Init")
         print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
         
-        # 构建 MMDetection 配置
+
         self.cfg = self._build_mmdet_config()
         
-        # 设置随机种子
+   
         if hasattr(args, 'seed'):
             set_random_seed(args.seed, deterministic=True)
         
-        # 构建模型
+ 
         self.model = build_detector(
             self.cfg.model,
             train_cfg=self.cfg.get('train_cfg'),
             test_cfg=self.cfg.get('test_cfg')
         )
-        
-        # 加载预训练权重（如果提供）
+
         if hasattr(args, 'pretrained') and args.pretrained:
             print(f"\n🔧 Loading pretrained weights: {args.pretrained}")
             self._load_pretrained_backbone(args.pretrained)
         else:
             print(f"⚠️  Training from scratch (no pretrained weights)")
         
-        # 构建数据集
+
         self.datasets = [build_dataset(self.cfg.data.train)]
         if len(self.cfg.workflow) == 2:
             import copy
             val_dataset = copy.deepcopy(self.cfg.data.val)
             val_dataset.pipeline = self.cfg.data.train.pipeline
             self.datasets.append(build_dataset(val_dataset))
-        
-        # WandB
+
         self.use_wandb = WANDB_AVAILABLE and not args.nowandb
         if self.use_wandb:
-            # 统一项目名为数据集名-experiments
+
             project_name = "coco-experiments"
             
-            # 运行名称包含模型、任务和关键参数
+      
             watermark = f"{args.model}_maskrcnn_size{args.size}_bs{args.bs}_lr{args.lr}"
             
             wandb.init(project=project_name, name=watermark)
@@ -72,23 +69,22 @@ class DetectionTask:
         elif not WANDB_AVAILABLE and not args.nowandb:
             print("WARNING: WandB not installed, skipping logging")
         
-        # 设置模型类别
+      
         self.model.CLASSES = self.datasets[0].CLASSES
         
     def _build_mmdet_config(self):
-        """从 args 构建 MMDetection 配置"""
+
         args = self.args
         
-        # 基础配置
+ 
         cfg = Config()
         
-        # ==================== 模型配置 ==================== #
+
         cfg.model = self._get_mask_rcnn_config()
-        
-        # ==================== 数据配置 ==================== #
+
         cfg.data = self._get_data_config()
         
-        # ==================== 优化器配置 ==================== #
+
         cfg.optimizer = dict(
             type='AdamW',
             lr=args.lr,
@@ -103,21 +99,19 @@ class DetectionTask:
             )
         )
         
-        # ==================== 学习率调度 ==================== #
+        # =learning rate scheduler configuration#
         cfg.lr_config = dict(
             policy='step',
             warmup='linear',
-            warmup_iters=args.warmup_epochs * 1000,  # 假设每个epoch 1000 iters
+            warmup_iters=args.warmup_epochs * 1000, 
             warmup_ratio=0.001,
             step=[args.n_epochs * 2 // 3, args.n_epochs * 8 // 9]
         )
-        
-        # ==================== Runner 配置（单卡训练）==================== #
+ 
         cfg.runner = dict(type='EpochBasedRunner', max_epochs=args.n_epochs)
         cfg.optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
-        
-        # ==================== Checkpoint 配置 ==================== #
-        # 保存格式: {model}_{task}_epoch_{epoch}.pth 和 {model}_{task}_best.pth
+ 
+        #  {model}_{task}_epoch_{epoch}.pth  {model}_{task}_best.pth
         model_name = args.model
         task_name = args.task or 'det'
         cfg.checkpoint_config = dict(
@@ -125,42 +119,40 @@ class DetectionTask:
             filename_tmpl=f'{model_name}_{task_name}_epoch_{{}}.pth'
         )
         
-        # ==================== 日志配置（仅在 epoch 结束时打印）==================== #
+
         cfg.log_config = dict(
-            interval=9999999,  # 设置很大的值，避免频繁打印
-            hooks=[
+            interval=9999999,  
                 dict(type='TextLoggerHook'),
             ]
         )
-        
-        # ==================== 进度条和 WandB 配置 ==================== #
+
         use_wandb = WANDB_AVAILABLE and not args.nowandb
         
         cfg.custom_hooks = [
             dict(type='NumClassCheckHook'),
-            dict(type='ProgressBarHook'),  # 添加进度条
-            dict(type='WandBLoggerHook', interval=100, use_wandb=use_wandb)  # WandB 记录训练和评估指标
+            dict(type='ProgressBarHook'),  
+            dict(type='WandBLoggerHook', interval=100, use_wandb=use_wandb)  
         ]
         
-        # ==================== 评估配置 ==================== #
+
         cfg.evaluation = dict(
-            interval=1,  # 每个 epoch 评估一次
-            metric=['bbox', 'segm'],  # 评估 bbox 和 segm
-            save_best='bbox_mAP',  # 根据 bbox mAP 保存最佳模型
-            classwise=False  # 不需要每个类别的详细指标
+            interval=1,  
+            metric=['bbox', 'segm'], 
+            save_best='bbox_mAP', 
+            classwise=False 
         )
         
-        # ==================== 其他配置 ==================== #
+     
         cfg.dist_params = dict(backend='nccl')
         cfg.log_level = 'INFO'
         cfg.work_dir = f'./work_dirs/{args.model}_maskrcnn'
-        cfg.load_from = None  # 不使用 MMDet 自动加载
+        cfg.load_from = None  # 
         cfg.resume_from = None
         cfg.workflow = [('train', 1)]
         cfg.gpu_ids = range(1)
         cfg.seed = getattr(args, 'seed', None)
         
-        # 确保不自动加载
+     
         print(f"[DEBUG] Detection cfg.load_from = {cfg.load_from}")
         print(f"[DEBUG] Detection model.type = {cfg.model.get('type', 'NOT SET')}")
         
@@ -170,10 +162,10 @@ class DetectionTask:
         """构建 Mask R-CNN 配置"""
         args = self.args
         
-        # Backbone 配置
+       
         backbone_cfg = self._get_backbone_config()
         
-        # Neck (FPN)
+      
         neck_cfg = dict(
             type='FPN',
             in_channels=self._get_backbone_out_channels(),
@@ -308,7 +300,7 @@ class DetectionTask:
         return model
     
     def _get_backbone_config(self):
-        """根据模型类型构建 Backbone 配置"""
+      
         args = self.args
         
         if args.model == 'swin':
@@ -339,7 +331,7 @@ class DetectionTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
                 dim_head=getattr(args, 'dim_head', 64),
-                out_indices=(2, 5, 8, 11)  # 选择4个中间层作为特征输出
+                out_indices=(2, 5, 8, 11) 
             )
         elif args.model == 'vitcope':
             return dict(
@@ -369,7 +361,7 @@ class DetectionTask:
             raise ValueError(f"Unknown model: {args.model}")
     
     def _get_backbone_out_channels(self):
-        """获取 Backbone 输出通道数"""
+       
         args = self.args
         
         if args.model == 'swin':
@@ -377,14 +369,14 @@ class DetectionTask:
             base_dim = args.embed_dim
             return [base_dim * (2 ** i) for i in range(4)]
         else:
-            # ViT 系列: 所有层都是相同维度
+          
             return [args.dim] * 4
     
     def _get_data_config(self):
-        """构建数据配置"""
+      
         args = self.args
         
-        # 获取图像分辨率（支持列表/元组/单个值）
+       
         if hasattr(args, 'img_scale'):
             if isinstance(args.img_scale, (tuple, list)):
                 img_scale = tuple(args.img_scale)  # 确保是元组
@@ -393,14 +385,14 @@ class DetectionTask:
         else:
             img_scale = (1333, 800)  # 默认 COCO 分辨率
         
-        # 图像归一化
+        # normalaztion
         img_norm_cfg = dict(
             mean=[123.675, 116.28, 103.53],
             std=[58.395, 57.12, 57.375],
             to_rgb=True
         )
         
-        # 训练Pipeline
+        # 
         train_pipeline = [
             dict(type='LoadImageFromFile'),
             dict(type='LoadAnnotations', with_bbox=True, with_mask=True),
@@ -412,7 +404,7 @@ class DetectionTask:
             dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels', 'gt_masks']),
         ]
         
-        # 测试Pipeline
+        #Pipeline
         test_pipeline = [
             dict(type='LoadImageFromFile'),
             dict(
@@ -456,7 +448,7 @@ class DetectionTask:
         return data
     
     def _load_pretrained_backbone(self, pretrained_path):
-        """加载分类任务预训练的backbone权重"""
+        """load weights"""
         import os
         print(f"\n{'='*60}")
         print(f"🔧 PRETRAINED LOADING DEBUG")
@@ -470,12 +462,11 @@ class DetectionTask:
             print(f"{'='*60}\n")
             return
         
-        # 加载分类模型的checkpoint
+        
         checkpoint = torch.load(pretrained_path, map_location='cpu')
         print(f"✅ Checkpoint loaded")
         print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
         
-        # 获取模型权重（支持不同的保存格式）
         if 'model' in checkpoint:
             pretrained_dict = checkpoint['model']
             print(f"   Using checkpoint['model']")
@@ -489,76 +480,72 @@ class DetectionTask:
         print(f"   Total pretrained keys: {len(pretrained_dict)}")
         print(f"   Sample keys: {list(pretrained_dict.keys())[:3]}")
         
-        # 过滤并重命名权重，只加载backbone部分
+    
         backbone_dict = {}
         skipped_keys = []
         for k, v in pretrained_dict.items():
-            # 跳过分类头和 CLS token
+            # jumpover mlp CLS token
             if 'mlp_head' in k or 'head' in k or 'fc' in k or 'cls_token' in k:
                 skipped_keys.append(k)
                 continue
             
-            # 键名映射：分类模型 -> 检测模型
+        
             new_k = k
             
-            # 1. transformer.layers.X.Y -> transformer_blocks.X.Y (ViT格式)
+            # 1. transformer.layers.X.Y -> transformer_blocks.X.Y (ViT
             new_k = new_k.replace('transformer.layers', 'transformer_blocks')
             
-            # 2. blocks.X -> transformer_blocks.X (ViTCoPE分类模型格式)
+            # 2. blocks.X -> transformer_blocks.X (ViTCoPE
             if new_k.startswith('blocks.'):
                 new_k = new_k.replace('blocks.', 'transformer_blocks.', 1)
             
-            # 3. to_patch.1 -> to_patch_embedding.1 (ViTCoPE/ViTSCoPE分类模型格式)
+            # 3. to_patch.1 -> to_patch_embedding.1 
             if new_k.startswith('to_patch.'):
                 new_k = new_k.replace('to_patch.', 'to_patch_embedding.', 1)
             
-            # 3.5. fn.scope.pos_emb -> fn.cope.pos_emb (ViTSCoPE分类模型格式)
-            # detection 使用 AttentionSCoPE，内部使用 cope 而不是 scope
+            # 3.5. fn.scope.pos_emb -> fn.cope.pos_emb 
             if 'fn.scope.pos_emb' in new_k:
                 new_k = new_k.replace('fn.scope.pos_emb', 'fn.cope.pos_emb')
             
-            # 4. attn.qkv -> fn.to_qkv, attn.proj -> fn.to_out (ViTCoPE分类模型格式)
-            # 这些在 PreNorm 内部，需要匹配 PreNorm 的结构
-            # detection 使用: transformer_blocks.X.0.fn.to_qkv
-            # 分类使用: blocks.X.attn.qkv
-            # 映射规则: blocks.X.attn.qkv -> transformer_blocks.X.0.fn.to_qkv
+            # 4. attn.qkv -> fn.to_qkv, attn.proj -> fn.to_out (ViTCoPE
+
+            # detection : transformer_blocks.X.0.fn.to_qkv
+            #  blocks.X.attn.qkv
+            # : blocks.X.attn.qkv -> transformer_blocks.X.0.fn.to_qkv
             if 'attn.qkv' in new_k:
                 new_k = new_k.replace('attn.qkv', '0.fn.to_qkv')
             elif 'attn.proj' in new_k:
                 new_k = new_k.replace('attn.proj', '0.fn.to_out')
             
-            # 5. mlp.fc1 -> fn.net.0, mlp.fc2 -> fn.net.3 (ViTCoPE分类模型格式)
+            # 5. mlp.fc1 -> fn.net.0, mlp.fc2 -> fn.net.3 
             # blocks.X.mlp.fc1 -> transformer_blocks.X.1.fn.net.0
             if 'mlp.fc1' in new_k:
                 new_k = new_k.replace('mlp.fc1', '1.fn.net.0')
             elif 'mlp.fc2' in new_k:
                 new_k = new_k.replace('mlp.fc2', '1.fn.net.3')
             
-            # 6. norm1 -> 0.norm, norm2 -> 1.norm (ViTCoPE分类模型格式)
+            # 6. norm1 -> 0.norm, norm2 -> 1.norm 
             if 'norm1' in new_k:
                 new_k = new_k.replace('norm1', '0.norm')
             elif 'norm2' in new_k:
                 new_k = new_k.replace('norm2', '1.norm')
             
-            # 7. cope_emb.pos_table -> 跳过，因为分类模型使用全局 CoPE，检测模型使用每层独立的 CoPE
-            # CoPE 位置编码可以在检测任务中重新训练，所以跳过不影响
+            # 7. cope_emb.pos_table -> jumpover
             if 'cope_emb' in new_k:
                 skipped_keys.append(k)
                 continue
             
-            # 重命名为检测模型的backbone前缀
+  
             new_key = f'backbone.{new_k}'
             backbone_dict[new_key] = v
-        
-        # 加载到检测模型
+
         model_dict = self.model.state_dict()
-        
-        # 检查哪些键匹配
+  
         matched_keys = []
         unmatched_keys = []
         for k, v in backbone_dict.items():
             if k in model_dict:
-                # 检查形状是否匹配
+                
                 if model_dict[k].shape == v.shape:
                     matched_keys.append(k)
                 else:
@@ -581,7 +568,7 @@ class DetectionTask:
             for uk in unmatched_keys[:10]:
                 print(f"     {uk}")
         
-        # 只更新存在且形状匹配的键
+
         pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in matched_keys}
         model_dict.update(pretrained_dict_filtered)
         self.model.load_state_dict(model_dict, strict=False)
@@ -599,8 +586,7 @@ class DetectionTask:
     def train(self):
         """开始训练"""
         print(f"🚀 Start training {self.args.model} + Mask R-CNN on COCO\n")
-        
-        # 调用 MMDetection 的训练 API
+  
         train_detector(
             self.model,
             self.datasets,

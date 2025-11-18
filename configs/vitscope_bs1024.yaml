@@ -1,8 +1,8 @@
-# configs/vitscope_bs1024.yaml - 大batch size测试
+# configs/vitscope_bs1024.yaml - Large batch size test
 task: cls
 model: vitscope
 data_dir: /home2/dnrx52/vitcope
-bs: 1024               # 4倍于原始256
+bs: 1024               # 4x original 256
 num_workers: 4
 size: 224
 n_epochs: 100
@@ -12,9 +12,9 @@ depth: 12
 heads: 6
 mlp_dim: 1536
 dim_head: 64
-lr: 1.2e-3             # 4倍学习率 (3e-4 * 4)
+lr: 1.2e-3             # 4x learning rate (3e-4 * 4)
 min_lr: 4e-5
-warmup_epochs: 5       # 大batch size需要更长warmup
+warmup_epochs: 5       # Large batch size requires longer warmup
 opt: adamw
 amp: true
 aug: true

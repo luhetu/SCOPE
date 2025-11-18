@@ -1,10 +1,10 @@
-# configs/seg_vitcope.yaml - ViT+CoPE + UPerNet for ADE20K
+# configs/seg_vitcope_40k.yaml - ViT+CoPE + UPerNet (40k iterations, paper settings)
 task: seg
 model: vitcope
 
 # Data configuration
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
-bs: 8
+bs: 16  # Optimization: increased from 8 to 16 to accelerate training
 pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
 
 # ViT+CoPE configuration (Tiny)
@@ -16,13 +16,18 @@ heads: 3   # ViT-Tiny configuration
 mlp_dim: 768  # ViT-Tiny configuration
 dim_head: 64
 
-# Training configuration (80k iterations, aligned with seg_vit)
-n_epochs: 32
-lr: 3e-5
+# Training configuration (40k iterations - paper standard settings)
+n_epochs: 32  # 32 epochs × 1263 iters/epoch ≈ 40k iterations
+lr: 6e-5  # Learning rate for bs=16
 min_lr: 0
 warmup_epochs: 0.9
 weight_decay: 0.01
 opt: adamw
 amp: false
 nowandb: false
+
+# Paper reference:
+# "We adopt UperNet and train for 40K iterations or 160K for longer training"
+# 40K iterations: ViT-Ti + CB achieves 36.5% mIoU
+
 

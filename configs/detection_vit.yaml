@@ -2,13 +2,13 @@
 task: det
 model: vit
 
-# 数据配置
+# Data configuration
 data_dir: /home2/dnrx52/copeondet/datasets/coco
-bs: 2
+bs: 8
 pretrained: ./checkpoint/vit_pretrained.pth
-img_scale: [1333, 800]  # COCO 标准分辨率（使用列表而非元组）
+img_scale: [768, 768]  # COCO standard resolution
 
-# ViT 配置 (Tiny)
+# ViT configuration (Tiny)
 size: 224
 patch: 16
 dim: 192
@@ -17,10 +17,10 @@ heads: 3
 mlp_dim: 768
 dim_head: 64
 
-# 训练配置
+# Training configuration (3x schedule)
 n_epochs: 12
-lr: 5e-5
-min_lr: 1e-6
+lr: 0.0001
+min_lr: 0.000001
 warmup_epochs: 1
 weight_decay: 0.05
 opt: adamw

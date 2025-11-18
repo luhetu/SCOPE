@@ -1,22 +1,22 @@
-# configs/vitscope_balanced.yaml - 平衡配置（针对num_workers=4优化）
+# configs/vitscope_balanced.yaml - Balanced configuration (optimized for num_workers=4)
 task: cls
 model: vitscope
 data_dir: /home2/dnrx52/vitcope
-bs: 128                # Swin风格的小batch size，最优for num_workers=4
+bs: 128                # Swin-style small batch size, optimal for num_workers=4
 num_workers: 4
 size: 224
 n_epochs: 100
-patch: 32              # ViT Tiny架构
+patch: 32              # ViT Tiny architecture
 dim: 384
 depth: 12
 heads: 6
 mlp_dim: 1536
 dim_head: 64
-lr: 1.5e-4             # bs=128的学习率（基础3e-4的一半）
-min_lr: 5e-6           # 相应降低min_lr
+lr: 1.5e-4             # Learning rate for bs=128 (half of base 3e-4)
+min_lr: 5e-6           # Correspondingly reduced min_lr
 warmup_epochs: 5
 opt: adamw
 amp: true
-aug: false             # 关闭RandAugment减轻CPU负担
+aug: false             # Disable RandAugment to reduce CPU burden
 nowandb: false
 

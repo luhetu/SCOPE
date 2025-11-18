@@ -10,7 +10,7 @@ def pair(t):
     return t if isinstance(t, tuple) else (t, t)
 
 # ————————————————
-# CoPE 模块：动态位置偏移
+# CoPE module: dynamic position offset
 # ————————————————
 class CoPE(nn.Module):
     def __init__(self, npos_max, dim_head):
@@ -42,7 +42,7 @@ class CoPE(nn.Module):
         e_c = emb2d.index_select(0, c_idx).view(B,H,N,self.dim_head)
         # 5) interpolate
         offset = e_f * (1 - w) + e_c * w          # [B, H, N, D_head]
-        return offset, gate  # 与 vitscope.py/vit_backbone.py 保持一致
+        return offset, gate  # Consistent with vitscope.py/vit_backbone.py
 
 # ————————————————
 # PreNorm & FeedForward
@@ -69,7 +69,7 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 # ————————————————
-# Attention：只用 CoPE，无 CNNGate
+# Attention: only use CoPE, no CNNGate
 # ————————————————
 class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, num_patches=64, dropout=0.):
@@ -85,6 +85,8 @@ class Attention(nn.Module):
             nn.Linear(inner, dim),
             nn.Dropout(dropout)
         )
+        self.vis_attn = None
+        self.vis_cope_gate = None
 
     def forward(self, x):
         # x: [B, N, dim]
@@ -93,20 +95,24 @@ class Attention(nn.Module):
 
         # raw attention logits
         logits = torch.matmul(q, k.transpose(-1,-2)) * self.scale  # [B,H,N,N]
-        # CoPE offset（返回两个值）
-        offset, _ = self.cope(q, logits)                           # [B,H,N,D_head]
+        # CoPE offset (returns two values)
+        offset, gate = self.cope(q, logits)                        # [B,H,N,D_head], [B,H,N]
 
         # apply to q
         q2 = q + offset
         # recompute attention
-        attn = self.attend(torch.matmul(q2, k.transpose(-1,-2)) * self.scale)
+        new_logits = torch.matmul(q2, k.transpose(-1,-2)) * self.scale
+        attn = self.attend(new_logits)
         out  = torch.matmul(attn, v)                               # [B,H,N,D_head]
         # merge heads
         out2 = rearrange(out, 'b h n d -> b n (h d)')
+        # Cache for visualization
+        self.vis_attn = attn.detach()
+        self.vis_cope_gate = gate.detach()
         return self.to_out(out2)
 
 # ————————————————
-# Transformer & ViTcope（去 CLS，mean pooling）
+# Transformer & ViTcope (remove CLS, mean pooling)
 # ————————————————
 class Transformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, num_patches, dropout=0.):
@@ -154,5 +160,5 @@ class ViTcope(nn.Module):
         x = x.mean(dim=1) if self.pool=='mean' else x[:,0]
         return self.mlp_head(x)
 
-# 别名，保持向后兼容性
+# Alias, maintain backward compatibility
 ViTCoPE = ViTcope

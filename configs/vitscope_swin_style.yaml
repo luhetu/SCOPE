@@ -1,22 +1,22 @@
-# configs/vitscope_swin_style.yaml - 模仿Swin官方配置
+# configs/vitscope_swin_style.yaml - Imitating Swin official configuration
 task: cls
 model: vitscope
 data_dir: /home2/dnrx52/vitcope
-bs: 128                # 和Swin一样的batch size
+bs: 128                # Same batch size as Swin
 num_workers: 4
 size: 224
 n_epochs: 100
-patch: 32              # ViT Tiny架构
+patch: 32              # ViT Tiny architecture
 dim: 384
 depth: 12
 heads: 6
 mlp_dim: 1536
 dim_head: 64
-lr: 1.5e-4             # 基础学习率的一半（bs=128）
+lr: 1.5e-4             # Half of base learning rate (bs=128)
 min_lr: 5e-6
 warmup_epochs: 5
 opt: adamw
 amp: true
-aug: false             # 关闭RandAugment减轻CPU负担
+aug: false             # Disable RandAugment to reduce CPU burden
 nowandb: false
 

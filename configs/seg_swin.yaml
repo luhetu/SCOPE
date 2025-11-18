@@ -2,11 +2,11 @@
 task: seg
 model: swin
 
-# 数据配置
+# Data configuration
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
-bs: 2  # 分割任务显存占用大，batch size 要小
+bs: 2  # Segmentation tasks require large memory, batch size should be small
 
-# Swin Transformer 配置
+# Swin Transformer configuration
 size: 512
 patch: 4
 embed_dim: 96
@@ -15,7 +15,7 @@ num_heads: [3, 6, 12, 24]
 window_size: 7
 drop_path_rate: 0.3
 
-# 训练配置
+# Training configuration
 n_epochs: 80  # 80k iterations / 1000 per epoch
 lr: 6e-5
 min_lr: 1e-6

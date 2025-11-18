@@ -1,6 +1,6 @@
 # --------------------------------------------------------
-# Swin Transformer V2 - 工具函数
-# 包含权重加载、模型构建等辅助函数
+# Swin Transformer V2 - Utility Functions
+# Contains helper functions for weight loading, model building, etc.
 # --------------------------------------------------------
 
 import torch
@@ -11,24 +11,26 @@ import os
 
 def load_pretrained_weights(model, pretrained_path, strict=False, prefix=''):
     """
-    加载预训练权重到模型
+    Load pretrained weights into a model.
     
     Args:
-        model: PyTorch模型
-        pretrained_path (str): 预训练权重文件路径
-        strict (bool): 是否严格匹配所有参数。默认False（允许部分加载）
-        prefix (str): 权重键的前缀（用于处理不同的保存格式）
+        model: PyTorch model.
+        pretrained_path (str): Path to the pretrained weights file.
+        strict (bool): Whether to strictly enforce that the keys in state_dict
+                       match the keys returned by model.state_dict(). Default False.
+        prefix (str): Optional prefix to add to state_dict keys (for handling
+                      different saving conventions).
     
     Returns:
-        model: 加载权重后的模型
+        model: The model with loaded weights.
     """
     if not os.path.exists(pretrained_path):
-        raise FileNotFoundError(f"权重文件不存在: {pretrained_path}")
+        raise FileNotFoundError(f"Weight file not found: {pretrained_path}")
     
-    print(f"从 {pretrained_path} 加载预训练权重...")
+    print(f"Loading pretrained weights from {pretrained_path} ...")
     checkpoint = torch.load(pretrained_path, map_location='cpu')
     
-    # 处理不同的checkpoint格式
+    # Handle different checkpoint formats
     if 'model' in checkpoint:
         state_dict = checkpoint['model']
     elif 'state_dict' in checkpoint:
@@ -36,11 +38,11 @@ def load_pretrained_weights(model, pretrained_path, strict=False, prefix=''):
     else:
         state_dict = checkpoint
     
-    # 处理DDP/DP包装的模型
+    # Handle DDP/DP-wrapped models
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
         if k.startswith('module.'):
-            name = k[7:]  # 移除'module.'前缀
+            name = k[7:]  # remove 'module.' prefix
         else:
             name = k
         
@@ -49,36 +51,36 @@ def load_pretrained_weights(model, pretrained_path, strict=False, prefix=''):
         
         new_state_dict[name] = v
     
-    # 加载权重
+    # Load weights
     missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=strict)
     
     if missing_keys:
-        print(f"缺失的键 ({len(missing_keys)}): {missing_keys[:5]}...")
+        print(f"Missing keys ({len(missing_keys)}): {missing_keys[:5]} ...")
     if unexpected_keys:
-        print(f"未预期的键 ({len(unexpected_keys)}): {unexpected_keys[:5]}...")
+        print(f"Unexpected keys ({len(unexpected_keys)}): {unexpected_keys[:5]} ...")
     
-    print("预训练权重加载完成！")
+    print("Pretrained weights loaded successfully!")
     return model
 
 
 def build_model_from_config(config, num_classes=1000):
     """
-    根据配置字典构建模型
+    Build a SwinTransformerV2 model from a configuration dictionary.
     
     Args:
-        config (dict): 模型配置字典
-        num_classes (int): 分类类别数
+        config (dict): Model configuration dictionary.
+        num_classes (int): Number of classification categories.
     
     Returns:
-        model: 构建的模型
+        model: The built model instance.
     """
     from .swin_v2_model import SwinTransformerV2
     
-    # 更新类别数
+    # Update num_classes
     model_config = config.copy()
     model_config['num_classes'] = num_classes
     
-    # 构建模型
+    # Build model
     model = SwinTransformerV2(**model_config)
     
     return model
@@ -86,68 +88,68 @@ def build_model_from_config(config, num_classes=1000):
 
 def download_pretrained_weights(url, save_path):
     """
-    从URL下载预训练权重
+    Download pretrained weights from a URL.
     
     Args:
-        url (str): 下载URL
-        save_path (str): 保存路径
+        url (str): Download URL.
+        save_path (str): Path to save the downloaded file.
     """
     import urllib.request
     
     if os.path.exists(save_path):
-        print(f"权重文件已存在: {save_path}")
+        print(f"Weight file already exists: {save_path}")
         return
     
-    # 确保目录存在
+    # Ensure directory exists
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
-    print(f"从 {url} 下载预训练权重...")
+    print(f"Downloading pretrained weights from {url} ...")
     try:
         urllib.request.urlretrieve(url, save_path)
-        print(f"下载完成，保存至: {save_path}")
+        print(f"Download completed and saved to: {save_path}")
     except Exception as e:
-        print(f"下载失败: {e}")
+        print(f"Download failed: {e}")
         raise
 
 
 def create_model(model_name='tiny', num_classes=1000, pretrained=False, 
                  pretrained_path=None, img_size=None):
     """
-    创建Swin V2模型的便捷函数
+    Convenience function to create a Swin V2 model.
     
     Args:
-        model_name (str): 模型名称 ('tiny', 'small', 'base', 'large')
-        num_classes (int): 分类类别数
-        pretrained (bool): 是否加载预训练权重
-        pretrained_path (str): 预训练权重路径（如果提供）
-        img_size (int): 输入图像尺寸（如果提供，会覆盖默认配置）
+        model_name (str): Model size ('tiny', 'small', 'base', 'large').
+        num_classes (int): Number of classification categories.
+        pretrained (bool): Whether to load pretrained weights.
+        pretrained_path (str): Path to pretrained weights (if provided).
+        img_size (int): Input image size; if provided, overrides config default.
     
     Returns:
-        model: 创建的模型
+        model: The created model.
     
-    示例:
-        >>> # 创建不带预训练权重的模型
+    Example:
+        >>> # Create a model without pretrained weights
         >>> model = create_model('tiny', num_classes=100)
         
-        >>> # 创建带预训练权重的模型
+        >>> # Create a model with pretrained weights
         >>> model = create_model('base', pretrained=True, pretrained_path='path/to/weights.pth')
         
-        >>> # 自定义图像尺寸
+        >>> # Custom image size
         >>> model = create_model('small', num_classes=10, img_size=384)
     """
     from .model_configs import get_config
     
-    # 获取配置
+    # Get base configuration
     config = get_config(model_name)
     
-    # 覆盖图像尺寸
+    # Override image size if specified
     if img_size is not None:
         config['img_size'] = img_size
     
-    # 构建模型
+    # Build model
     model = build_model_from_config(config, num_classes=num_classes)
     
-    # 加载预训练权重
+    # Load pretrained weights if requested
     if pretrained and pretrained_path:
         model = load_pretrained_weights(model, pretrained_path, strict=False)
     
@@ -156,15 +158,15 @@ def create_model(model_name='tiny', num_classes=1000, pretrained=False,
 
 def get_model_info(model):
     """
-    获取模型信息（参数量、FLOPs等）
+    Get basic model information (parameter count, FLOPs, etc.).
     
     Args:
-        model: PyTorch模型
+        model: PyTorch model.
     
     Returns:
-        dict: 包含模型信息的字典
+        dict: Dictionary containing model information.
     """
-    # 计算参数量
+    # Parameter counts
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
@@ -175,13 +177,13 @@ def get_model_info(model):
         'trainable_params_M': trainable_params / 1e6,
     }
     
-    # 尝试获取FLOPs（如果模型有flops方法）
+    # Try to get FLOPs if the model defines a flops() method
     if hasattr(model, 'flops'):
         try:
             flops = model.flops()
             info['flops'] = flops
             info['flops_G'] = flops / 1e9
-        except:
+        except Exception:
             pass
     
     return info
@@ -189,46 +191,49 @@ def get_model_info(model):
 
 def print_model_info(model):
     """
-    打印模型信息
+    Print model information.
     
     Args:
-        model: PyTorch模型
+        model: PyTorch model.
     """
     info = get_model_info(model)
     
     print("=" * 60)
-    print("模型信息:")
+    print("Model Info:")
     print("-" * 60)
-    print(f"总参数量: {info['total_params']:,} ({info['total_params_M']:.2f}M)")
-    print(f"可训练参数: {info['trainable_params']:,} ({info['trainable_params_M']:.2f}M)")
+    print(f"Total params: {info['total_params']:,} ({info['total_params_M']:.2f} M)")
+    print(f"Trainable params: {info['trainable_params']:,} ({info['trainable_params_M']:.2f} M)")
     
     if 'flops_G' in info:
-        print(f"FLOPs: {info['flops']:,} ({info['flops_G']:.2f}G)")
+        print(f"FLOPs: {info['flops']:,} ({info['flops_G']:.2f} G)")
     
     print("=" * 60)
 
 
 def convert_to_backbone(model, output_indices=[0, 1, 2, 3]):
     """
-    将分类模型转换为backbone（用于检测/分割任务）
+    Convert a classification Swin V2 model into a backbone (for detection/segmentation).
     
     Args:
-        model: Swin V2分类模型
-        output_indices (list): 需要输出的stage索引
+        model: Swin V2 classification model.
+        output_indices (list): Indices of stages whose features will be returned.
     
     Returns:
-        backbone: 修改后的backbone模型
+        backbone: Modified backbone model.
     
-    注意: 这会移除分类头，并修改forward方法以输出多尺度特征
+    Note:
+        This removes the classification head and modifies the forward method
+        to output multi-scale feature maps.
     """
-    # 移除分类头
+    # Remove classification head
     model.head = nn.Identity()
     
-    # 保存原始的forward方法
-    original_forward = model.forward_features
+    # Save original forward_features (not used directly after replacement,
+    # but kept in case you want to restore or inspect)
+    original_forward = model.forward_features  # noqa: F841 (kept intentionally)
     
     def forward_backbone(self, x):
-        """提取多尺度特征的forward方法"""
+        """Forward method for extracting multi-scale feature maps."""
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
@@ -238,7 +243,7 @@ def convert_to_backbone(model, output_indices=[0, 1, 2, 3]):
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i in output_indices:
-                # 重塑为 (B, C, H, W) 格式
+                # Reshape to (B, C, H, W)
                 B, L, C = x.shape
                 H = W = int(L ** 0.5)
                 feat = x.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
@@ -246,9 +251,8 @@ def convert_to_backbone(model, output_indices=[0, 1, 2, 3]):
         
         return features
     
-    # 替换forward方法
+    # Replace forward with backbone-style forward
     import types
     model.forward = types.MethodType(forward_backbone, model)
     
     return model
-

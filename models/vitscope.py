@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ViT-SCoPE: Q-offset + HKGate + CLS (224x224, patch=16, ViT-Tiny友好实现)
+# ViT-SCoPE: Q-offset + HKGate + CLS (224x224, patch=16, ViT-Tiny friendly implementation)
 import torch
 from torch import nn
 from einops import rearrange
@@ -7,29 +7,29 @@ from einops.layers.torch import Rearrange
 
 def pair(t): return t if isinstance(t, tuple) else (t, t)
 
-# ---------------- HKGate：对齐到 patch 网格 + 轻量归一化 ----------------
+# ---------------- HKGate: align to patch grid + lightweight normalization ----------------
 class HKGate(nn.Module):
     def __init__(self, out_hw):
         super().__init__()
         self.global_avgpool = nn.AdaptiveAvgPool2d(1)
         self.alpha = nn.Parameter(torch.tensor(0.1))
         self.max4 = nn.MaxPool2d(4, 4)
-        self.adapt = nn.AdaptiveAvgPool2d(out_hw)  # 强制对齐到 (h_p, w_p)
+        self.adapt = nn.AdaptiveAvgPool2d(out_hw)  # Force align to (h_p, w_p)
         self.beta = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, x):                       # x: [B,3,H,W]
         mu = self.global_avgpool(x)
-        x  = x + (1 + self.alpha) * (x - mu)    # 对比增强
+        x  = x + (1 + self.alpha) * (x - mu)    # Contrast enhancement
         x  = self.max4(x)                       # 224->56
         x  = self.max4(x)                       # 56->14
         x  = self.adapt(x).mean(dim=1)          # [B, h_p, w_p]
         gate = x.flatten(1)                     # [B, N]
-        # per-sample 归一化到 (0,1)
+        # Per-sample normalize to (0,1)
         gate = (gate - gate.mean(dim=1, keepdim=True)) / (gate.std(dim=1, keepdim=True) + 1e-5)
         gate = torch.sigmoid(self.beta * gate)
         return gate                              # [B, N] ∈ (0,1)
 
-# ---------------- CoPE：Q-offset（保持你的实现） ----------------
+# ---------------- CoPE: Q-offset (keep your implementation) ----------------
 class CoPE(nn.Module):
     def __init__(self, npos_max, dim_head):
         super().__init__()
@@ -50,7 +50,7 @@ class CoPE(nn.Module):
         offset = e_f * (1 - w) + e_c * w                                # [B,H,N,D]
         return offset, gates
 
-# ---------------- 基础层 ----------------
+# ---------------- Base layers ----------------
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -66,7 +66,7 @@ class FeedForward(nn.Module):
         )
     def forward(self, x): return self.net(x)
 
-# ---------------- Attention：Q-offset + λ凸组合融合 + CLS gate ----------------
+# ---------------- Attention: Q-offset + λ convex combination fusion + CLS gate ----------------
 class Attention(nn.Module):
     def __init__(self, dim, heads=6, dim_head=32, num_patches=196, dropout=0.):
         super().__init__()
@@ -74,26 +74,26 @@ class Attention(nn.Module):
         self.heads = heads
         self.scale = dim_head ** -0.5
         self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
-        self.cope  = CoPE(npos_max=num_patches + 1, dim_head=dim_head)  # +1 含CLS
-        self.lam   = nn.Parameter(torch.tensor(0.5))                    # 学习λ，做凸组合
+        self.cope  = CoPE(npos_max=num_patches + 1, dim_head=dim_head)  # +1 includes CLS
+        self.lam   = nn.Parameter(torch.tensor(0.5))                    # Learn λ for convex combination
         self.to_out = nn.Sequential(nn.Linear(inner, dim), nn.Dropout(dropout))
 
     def forward(self, x, hk_gate_1d):
-        # x: [B,1+N,dim], hk_gate_1d: [B,N] (已对齐patch)
+        # x: [B,1+N,dim], hk_gate_1d: [B,N] (aligned to patches)
         B, N_all, _ = x.shape
-        assert hk_gate_1d.shape[1] == N_all - 1, "HKGate长度应等于patch数"
+        assert hk_gate_1d.shape[1] == N_all - 1, "HKGate length should equal patch count"
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q,k,v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
         dots = torch.matmul(q, k.transpose(-1,-2)) * self.scale         # [B,H,N_all,N_all]
         offset, cope_gate = self.cope(q, dots)                           # offset:[B,H,N_all,D], cope_gate:[B,H,N_all]
 
-        # CLS gate来自 CoPE 的第0列（多头均值），与 HKGate 拼接
+        # CLS gate from CoPE column 0 (multi-head average), concatenated with HKGate
         cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)     # [B,1]
         hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)          # [B,N_all]
         hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)        # [B,H,N_all]
 
-        # 凸组合融合（避免二次sigmoid抹平动态范围）
+        # Convex combination fusion (avoid secondary sigmoid flattening dynamic range)
         lam = torch.sigmoid(self.lam)                                    # (0,1)
         fused_gate = lam * cope_gate + (1 - lam) * hk_full               # [B,H,N_all] ∈ (0,1)
 
@@ -118,11 +118,11 @@ class Transformer(nn.Module):
             x = ff(x) + x
         return x
 
-# ---------------- ViT-SCoPE 主体（含 CLS，读取 CLS） ----------------
+# ---------------- ViT-SCoPE 主Body (含 CLS,Read CLS) ----------------
 class ViTSCoPE(nn.Module):
     """
-    默认：image_size=224, patch_size=16, dim=192, depth=12, heads=6, dim_head=32, mlp_dim=768
-    这是更像 ViT-Tiny 的配置（总维度不变，head×dim_head=192）
+    Default:image_size=224, patch_size=16, dim=192, depth=12, heads=6, dim_head=32, mlp_dim=768
+
     """
     def __init__(self, *, image_size=224, patch_size=16,
                  num_classes=1000, dim=192, depth=12, heads=6, mlp_dim=768,
@@ -148,7 +148,7 @@ class ViTSCoPE(nn.Module):
         nn.init.trunc_normal_(self.head.weight, std=0.02)
         nn.init.zeros_(self.head.bias)
 
-        self.hk_gate = HKGate(out_hw=(h_p, w_p))   # 与 patch 网格严格对齐
+        self.hk_gate = HKGate(out_hw=(h_p, w_p))   
 
     def forward(self, img: torch.Tensor):
         B = img.size(0)
