@@ -3,7 +3,7 @@ import os, time, torch
 import torch.nn as nn
 from utils.optim import build_optimizer, build_scheduler
 from utils.progress_bar import progress_bar
-from datasets.classification import build_imagenet_loader, build_cifar10_loader, build_cifar100_loader
+from datasets.classification import build_imagenet_loader, build_imagenet100_loader, build_cifar10_loader, build_cifar100_loader
 import wandb
 
 
@@ -14,6 +14,8 @@ class ClassificationTask:
         
         # Determine number of classes based on dataset
         dataset_name = getattr(args, 'dataset', 'imagenet')
+        data_dir = getattr(args, 'data_dir', None)
+        print(f"✅ [dataset] {dataset_name} | data_dir={data_dir}")
         if dataset_name == 'cifar10':
             self.num_classes = 10
         elif dataset_name == 'cifar100':
@@ -39,6 +41,8 @@ class ClassificationTask:
             mlp_dim = args.mlp_dim if hasattr(args, 'mlp_dim') and args.mlp_dim else args.dim * 4
             # dim_head parameter (default = dim // heads)
             dim_head = getattr(args, 'dim_head', args.dim // args.heads) if hasattr(args, 'heads') else 64
+            use_cls_token = bool(getattr(args, 'use_cls_token', False))
+            pool = getattr(args, 'pool', 'cls' if use_cls_token else 'mean')
             self.net = ViTCoPE(
                 image_size=args.size,
                 patch_size=args.patch,
@@ -48,6 +52,8 @@ class ClassificationTask:
                 heads=args.heads,
                 dim_head=dim_head,
                 mlp_dim=mlp_dim,
+                use_cls_token=use_cls_token,
+                pool=pool,
                 dropout=0.1,
                 emb_dropout=0.1
             )
@@ -64,6 +70,60 @@ class ClassificationTask:
                 mlp_dim=args.mlp_dim,
                 dim_head=dim_head
                 # Note: New version forces CLS token; pool is removed
+            )
+        elif args.model == 'vitscope_nocls':
+            from models.vitscope_nocls import ViTScope_NoCLS
+            dim_head = getattr(args, 'dim_head', 64)
+            self.net = ViTScope_NoCLS(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=self.num_classes,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                dim_head=dim_head
+            )
+        elif args.model == 'vitpool':
+            from models.vitpool import ViTPool
+            dim_head = getattr(args, 'dim_head', 32)
+            self.net = ViTPool(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=self.num_classes,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                dim_head=dim_head
+            )
+        elif args.model == 'vitpool_nocls':
+            from models.vitpool_nocls import ViTPool_NoCLS
+            dim_head = getattr(args, 'dim_head', 32)
+            self.net = ViTPool_NoCLS(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=self.num_classes,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                dim_head=dim_head
+            )
+        elif args.model == 'vitcpe':
+            from models.vitcpe import ViT_CPE
+            dim_head = getattr(args, 'dim_head', 64)
+            self.net = ViT_CPE(
+                image_size=args.size,
+                patch_size=args.patch,
+                num_classes=self.num_classes,
+                dim=args.dim,
+                depth=args.depth,
+                heads=args.heads,
+                mlp_dim=args.mlp_dim,
+                dim_head=dim_head,
+                dropout=0.1,
+                emb_dropout=0.1
             )
         elif args.model == 'vitscope_old':
             from models.vitscope import ViTScope
@@ -96,6 +156,8 @@ class ClassificationTask:
         
         # Auto-detect NCC environment and set workers
         num_workers = 6 if 'SLURM_JOB_ID' in os.environ else 4
+        if hasattr(args, 'workers_per_gpu') and args.workers_per_gpu is not None:
+            num_workers = int(args.workers_per_gpu)
         
         # Dataset loader
         dataset_name = getattr(args, 'dataset', 'imagenet')
@@ -107,10 +169,16 @@ class ClassificationTask:
             self.trainloader, self.valloader = build_cifar100_loader(
                 args.data_dir, args.size, args.bs, num_workers, args.aug
             )
-        else:  # imagenet
-            self.trainloader, self.valloader = build_imagenet_loader(
-                args.data_dir, args.size, args.bs, num_workers, args.aug
-            )
+        else:  # imagenet / imagenet100
+            dataset_name = getattr(args, 'dataset', 'imagenet')
+            if dataset_name in ['imagenet100', 'im100']:
+                self.trainloader, self.valloader = build_imagenet100_loader(
+                    args.data_dir, args.size, args.bs, num_workers, args.aug
+                )
+            else:
+                self.trainloader, self.valloader = build_imagenet_loader(
+                    args.data_dir, args.size, args.bs, num_workers, args.aug
+                )
 
         # ------------------ Loss & Optimizer ------------------ #
         # Label smoothing requires PyTorch >= 1.10
@@ -133,6 +201,14 @@ class ClassificationTask:
         if hasattr(args, 'resume') and args.resume:
             self.load_checkpoint(args.resume)
 
+        # Optional lightweight timing for profiling
+        self.time_profile = bool(getattr(args, 'time_profile', False))
+        self.time_profile_interval = int(getattr(args, 'time_profile_interval', 1000))
+        self.time_profile = self.time_profile and self.time_profile_interval > 0
+        self.log_interval = int(getattr(args, 'log_interval', 50))
+        if self.log_interval <= 0:
+            self.log_interval = 50
+
         # ------------------ WandB ------------------ #
         self.use_wandb = not args.nowandb
         if self.use_wandb:
@@ -141,34 +217,53 @@ class ClassificationTask:
             
             wandb.init(project=project_name, name=watermark)
             wandb.config.update(vars(args))
-            wandb.watch(self.net, log="all", log_freq=100)
+            wandb.watch(self.net, log="gradients", log_freq=1000)
 
     # ------------------------------------------------------- #
     def train_one_epoch(self, epoch):
         self.net.train()
         total_loss, correct, total = 0.0, 0, 0
+        prev_end = time.time() if self.time_profile else None
         for batch_idx, (inputs, targets) in enumerate(self.trainloader):
+            batch_start = time.time() if self.time_profile else None
+            wait_ms = (batch_start - prev_end) * 1000.0 if self.time_profile else None
             inputs, targets = inputs.to(self.device), targets.to(self.device)
+            after_data = time.time() if self.time_profile else None
             self.optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast('cuda', enabled=self.args.amp):
                 outputs = self.net(inputs)
                 loss = self.criterion(outputs, targets)
+            after_forward = time.time() if self.time_profile else None
 
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            after_step = time.time() if self.time_profile else None
+            if self.time_profile:
+                prev_end = after_step
 
             total_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            progress_bar(
-                batch_idx,
-                len(self.trainloader),
-                f"Loss:{total_loss/(batch_idx+1):.3f} | Acc:{100.*correct/total:.2f}%"
-            )
+            if self.time_profile and (batch_idx % self.time_profile_interval == 0):
+                data_ms = (after_data - batch_start) * 1000.0
+                fwd_ms = (after_forward - after_data) * 1000.0
+                step_ms = (after_step - after_forward) * 1000.0
+                total_ms = (after_step - batch_start) * 1000.0
+                # fwd_ms = CPU-side async kernel launch only (GPU still running)
+                # step_ms = bwd+optimizer+GPU-sync (true GPU compute time)
+                gpu_util = 100.0 * total_ms / (total_ms + wait_ms) if wait_ms > 0 else 100.0
+                msg = (
+                    f"[PROFILE] batch={batch_idx} "
+                    f"wait={wait_ms:.1f}ms data={data_ms:.1f}ms "
+                    f"fwd_launch={fwd_ms:.1f}ms bwd+opt(GPU)={step_ms:.1f}ms "
+                    f"compute={total_ms:.1f}ms gpu_util={gpu_util:.1f}% "
+                    f"| Loss:{total_loss/(batch_idx+1):.3f} | Acc:{100.*correct/total:.2f}%"
+                )
+                print(msg, flush=True)
 
         train_acc = 100. * correct / total
         return total_loss / (batch_idx + 1), train_acc
@@ -187,12 +282,6 @@ class ClassificationTask:
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
                 
-                progress_bar(
-                    batch_idx,
-                    len(self.valloader),
-                    f"Loss:{total_loss/(batch_idx+1):.3f} | Acc:{100.*correct/total:.2f}%"
-                )
-        
         acc = 100. * correct / total
         return total_loss / (batch_idx + 1), acc
 
@@ -200,7 +289,16 @@ class ClassificationTask:
     def save_checkpoint(self, acc, epoch, best=False):
         os.makedirs('checkpoint', exist_ok=True)
         task = self.args.task or 'cls'
-        filename = f"checkpoint/{self.args.model}_{task}_{'best' if best else 'last'}.pth"
+        size = getattr(self.args, 'size', 'na')
+        patch = getattr(self.args, 'patch', 'na')
+        dim = getattr(self.args, 'dim', 'na')
+        depth = getattr(self.args, 'depth', 'na')
+        tag = 'best' if best else 'last'
+        filename = (
+            f"checkpoint/{self.args.model}_{task}_"
+            f"size{size}_patch{patch}_dim{dim}_depth{depth}_"
+            f"{tag}.pth"
+        )
         state = {
             'model': self.net.state_dict(),
             'optimizer': self.optimizer.state_dict(),

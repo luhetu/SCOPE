@@ -8,7 +8,7 @@ bs: 8
 pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
 
 # ViT+CoPE configuration (Tiny)
-size: 512
+size: 224
 patch: 16  # ViT-Tiny configuration
 dim: 192   # ViT-Tiny configuration
 depth: 12  # ViT-Tiny configuration

@@ -1,7 +1,7 @@
 # configs/vitscope_swin_style.yaml - Imitating Swin official configuration
 task: cls
-model: vitscope
-data_dir: /home2/dnrx52/vitcope
+model: vitscope_nocls
+data_dir: /home3/dnrx52/vitcope
 bs: 128                # Same batch size as Swin
 num_workers: 4
 size: 224

@@ -8,7 +8,7 @@ bs: 16  # 🔧 Optimization: increased from 8 to 16, speeds up training
 pretrained: ./checkpoint/pretrained/vitscope_pretrained.pth  # ✅ Fix: use correct SCoPE weights!
 
 # ViT+SCoPE configuration (Tiny)
-size: 512
+size: 224
 patch: 16  # ViT-Tiny configuration
 dim: 192   # ViT-Tiny configuration
 depth: 12  # ViT-Tiny configuration

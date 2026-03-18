@@ -1,5 +1,5 @@
 task: cls
-model: vitscope
+model: vitscope_nocls
 dataset: cifar10
 data_dir: ./data
 bs: 128

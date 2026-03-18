@@ -242,6 +242,13 @@ class ViTBackbone(nn.Module):
                 out_normed = rearrange(out, 'b d h w -> b h w d')
                 out_normed = self.norms[norm_idx](out_normed)
                 out = rearrange(out_normed, 'b h w d -> b d h w')
+                # Create a simple pyramid by downsampling per level index
+                if len(self.out_indices) > 1:
+                    import torch.nn.functional as F
+                    target_h = max(1, actual_h // (2 ** norm_idx))
+                    target_w = max(1, actual_w // (2 ** norm_idx))
+                    if out.shape[-2:] != (target_h, target_w):
+                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
                 outs.append(out)
 
         return tuple(outs)
@@ -266,13 +273,20 @@ class CoPE(nn.Module):
         nn.init.xavier_uniform_(self.pos_emb)
 
     def forward(self, q, attn_logits):
+        import torch.nn.functional as F
         gate = torch.sigmoid(attn_logits.mean(dim=-1))
         pos = gate.flip(-1).cumsum(dim=-1).flip(-1)
-        pos = pos.clamp(0, self.npos_max-1)
+
+        # Dynamically interpolate pos_emb to current sequence length
+        target_len = attn_logits.shape[-1]
+        pos_emb = self.pos_emb
+        if pos_emb.shape[-1] != target_len:
+            pos_emb = F.interpolate(pos_emb, size=target_len, mode='linear', align_corners=False)
+        pos = pos.clamp(0, target_len - 1)
         f = pos.floor().long()
         c = pos.ceil().long()
         w = (pos - f).unsqueeze(-1)
-        emb2d = self.pos_emb[0].transpose(0,1)
+        emb2d = pos_emb[0].transpose(0,1)
         B,H,N = f.shape
         f_idx = f.reshape(-1)
         c_idx = c.reshape(-1)
@@ -483,6 +497,12 @@ class ViTCoPEBackbone(nn.Module):
                 out_normed = rearrange(out, 'b d h w -> b h w d')
                 out_normed = self.norms[norm_idx](out_normed)
                 out = rearrange(out_normed, 'b h w d -> b d h w')
+                if len(self.out_indices) > 1:
+                    import torch.nn.functional as F
+                    target_h = max(1, actual_h // (2 ** norm_idx))
+                    target_w = max(1, actual_w // (2 ** norm_idx))
+                    if out.shape[-2:] != (target_h, target_w):
+                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
                 outs.append(out)
         
         return tuple(outs)
@@ -597,6 +617,12 @@ class ViTSCoPEBackbone(nn.Module):
                 out_normed = rearrange(out, 'b d h w -> b h w d')
                 out_normed = self.norms[norm_idx](out_normed)
                 out = rearrange(out_normed, 'b h w d -> b d h w')
+                if len(self.out_indices) > 1:
+                    import torch.nn.functional as F
+                    target_h = max(1, actual_h // (2 ** norm_idx))
+                    target_w = max(1, actual_w // (2 ** norm_idx))
+                    if out.shape[-2:] != (target_h, target_w):
+                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
                 outs.append(out)
         
         return tuple(outs)

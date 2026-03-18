@@ -1,0 +1,32 @@
+# Standard detection config (COCO + Mask R-CNN)
+# Notes:
+# - Uses COCO 1x schedule with 1333x800 scale.
+# - Adjust bs/model/pretrained as needed for your GPU.
+task: det
+model: vitcope
+
+# Data configuration
+data_dir: /home3/dnrx52/copeondet/datasets/coco
+bs: 2
+pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
+img_scale: [1333, 800]
+
+# Backbone configuration (Tiny)
+size: 224
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+
+# Training configuration (1x = 12 epochs)
+n_epochs: 12
+lr: 0.0001
+min_lr: 0.000001
+warmup_epochs: 1
+weight_decay: 0.05
+opt: adamw
+amp: true
+nowandb: false
+

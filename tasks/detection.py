@@ -100,10 +100,13 @@ class DetectionTask:
         )
         
         # =learning rate scheduler configuration#
+        warmup_iters = getattr(args, 'warmup_iters', None)
+        if warmup_iters is None:
+            warmup_iters = int(getattr(args, 'warmup_epochs', 0) * 1000)
         cfg.lr_config = dict(
             policy='step',
             warmup='linear',
-            warmup_iters=args.warmup_epochs * 1000, 
+            warmup_iters=warmup_iters,
             warmup_ratio=0.001,
             step=[args.n_epochs * 2 // 3, args.n_epochs * 8 // 9]
         )
@@ -121,7 +124,8 @@ class DetectionTask:
         
 
         cfg.log_config = dict(
-            interval=9999999,  
+            interval=9999999,
+            hooks=[
                 dict(type='TextLoggerHook'),
             ]
         )
@@ -413,7 +417,6 @@ class DetectionTask:
                 flip=False,
                 transforms=[
                     dict(type='Resize', keep_ratio=True),
-                    dict(type='RandomFlip'),
                     dict(type='Normalize', **img_norm_cfg),
                     dict(type='Pad', size_divisor=32),
                     dict(type='ImageToTensor', keys=['img']),

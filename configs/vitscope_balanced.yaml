@@ -1,7 +1,7 @@
 # configs/vitscope_balanced.yaml - Balanced configuration (optimized for num_workers=4)
 task: cls
-model: vitscope
-data_dir: /home2/dnrx52/vitcope
+model: vitscope_nocls
+data_dir: /home3/dnrx52/vitcope
 bs: 128                # Swin-style small batch size, optimal for num_workers=4
 num_workers: 4
 size: 224

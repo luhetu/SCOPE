@@ -1,7 +1,7 @@
 # configs/vitscope_bs1536.yaml - Balanced batch size
 task: cls
-model: vitscope
-data_dir: /home2/dnrx52/vitcope
+model: vitscope_nocls
+data_dir: /home3/dnrx52/vitcope
 bs: 1536               # 6x original 256
 num_workers: 4
 size: 224

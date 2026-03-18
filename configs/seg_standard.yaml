@@ -1,0 +1,31 @@
+# Standard segmentation config (ADE20K + UPerNet)
+# Notes:
+# - Uses 512 crop and ~80k iterations.
+# - Adjust bs/model/pretrained as needed for your GPU.
+task: seg
+model: vitcope
+
+# Data configuration
+data_dir: ./datasets/ADE20K/ADEChallengeData2016
+bs: 4
+pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
+
+# Backbone configuration (Tiny)
+size: 512
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+
+# Training configuration (~80k iters for ADE20K when bs=4)
+n_epochs: 16
+lr: 3e-5
+min_lr: 0
+warmup_epochs: 0.3
+weight_decay: 0.01
+opt: adamw
+amp: false
+nowandb: false
+

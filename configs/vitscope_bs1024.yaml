@@ -1,7 +1,7 @@
 # configs/vitscope_bs1024.yaml - Large batch size test
 task: cls
-model: vitscope
-data_dir: /home2/dnrx52/vitcope
+model: vitscope_nocls
+data_dir: /home3/dnrx52/vitcope
 bs: 1024               # 4x original 256
 num_workers: 4
 size: 224

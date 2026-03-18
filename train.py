@@ -25,7 +25,7 @@ def check_environment(args):
     
     task = args.task
     pytorch_version = torch.__version__
-    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    python_version = "{}.{}".format(sys.version_info.major, sys.version_info.minor)
     
     # Detection and segmentation tasks require mmcv-full
     if task in ['det', 'seg']:
@@ -58,6 +58,10 @@ def main():
     parser.add_argument("--cfg", type=str, default="", help="YAML config path")
     parser.add_argument("--resume", type=str, default="", help="Resume from checkpoint")
     parser.add_argument("--workers_per_gpu", type=int, default=None, help="Override dataloader workers per GPU")
+    parser.add_argument("--model", type=str, default=None, help="Override model name from config")
+    parser.add_argument("--data_dir", type=str, default=None, help="Override data_dir (e.g. local scratch $TMPDIR)")
+    parser.add_argument("--time_profile", action="store_true", help="Enable lightweight timing logs")
+    parser.add_argument("--time_profile_interval", type=int, default=1000, help="Timing log interval (batches)")
 
     # ✅ Load config correctly
     args = load_cfg(parser)

@@ -40,10 +40,16 @@ class CoPE(nn.Module):
 
     def forward(self, q, attn_logits):
         # q: [B,H,N,D] ; attn_logits: [B,H,N,N]
+        import torch.nn.functional as F
         gates = torch.sigmoid(attn_logits.mean(dim=-1))                 # [B,H,N]
-        pos = gates.flip(-1).cumsum(dim=-1).flip(-1).clamp(0, self.npos_max - 1)
+        pos = gates.flip(-1).cumsum(dim=-1).flip(-1)
+        target_len = attn_logits.shape[-1]
+        pos_emb = self.pos_emb
+        if pos_emb.shape[-1] != target_len:
+            pos_emb = F.interpolate(pos_emb, size=target_len, mode='linear', align_corners=False)
+        pos = pos.clamp(0, target_len - 1)
         f = pos.floor().long(); c = pos.ceil().long(); w = (pos - f).unsqueeze(-1)
-        table = self.pos_emb[0].transpose(0, 1)                         # [N, D]
+        table = pos_emb[0].transpose(0, 1)                               # [N, D]
         B,H,N = f.shape
         e_f = table.index_select(0, f.reshape(-1)).view(B,H,N,self.dim_head)
         e_c = table.index_select(0, c.reshape(-1)).view(B,H,N,self.dim_head)

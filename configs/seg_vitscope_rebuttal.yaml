@@ -1,0 +1,27 @@
+# configs/seg_vitscope_rebuttal.yaml - ViT+SCoPE + UPerNet for ADE20K (160K iters)
+task: seg
+model: vitscope
+
+# Data configuration
+data_dir: ./datasets/ADE20K/ADEChallengeData2016
+bs: 16
+pretrained: ./checkpoint/pretrained/vitscope_pretrained.pth
+
+# ViT-Tiny configuration
+size: 224
+patch: 16
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
+dim_head: 64
+
+# Training configuration (~160K iterations with bs=16)
+n_epochs: 128
+lr: 6e-5
+min_lr: 0
+warmup_epochs: 1
+weight_decay: 0.01
+opt: adamw
+amp: true
+nowandb: false

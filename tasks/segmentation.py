@@ -95,10 +95,13 @@ class SegmentationTask:
         cfg.optimizer_config = dict(grad_clip=None)
         
         # ==================== LR schedule ==================== #
+        warmup_iters = getattr(args, 'warmup_iters', None)
+        if warmup_iters is None:
+            warmup_iters = int(getattr(args, 'warmup_epochs', 0) * 1000)
         cfg.lr_config = dict(
             policy='poly',
             warmup='linear',
-            warmup_iters=args.warmup_epochs * 1000,  # assume ~1000 iters per epoch
+            warmup_iters=warmup_iters,
             warmup_ratio=1e-6,
             power=1.0,
             min_lr=args.min_lr,
@@ -106,7 +109,10 @@ class SegmentationTask:
         )
         
         # ==================== Runner config (iter-based, single GPU) ==================== #
-        cfg.runner = dict(type='IterBasedRunner', max_iters=args.n_epochs * 1000)
+        max_iters = getattr(args, 'max_iters', None)
+        if max_iters is None:
+            max_iters = int(args.n_epochs * 1000)
+        cfg.runner = dict(type='IterBasedRunner', max_iters=max_iters)
         
         # ==================== Checkpoint config ==================== #
         # Save format: {model}_{task}_iter_{iter}.pth
@@ -321,7 +327,6 @@ class SegmentationTask:
                 flip=False,
                 transforms=[
                     dict(type='Resize', keep_ratio=False),  # force exact size
-                    dict(type='RandomFlip'),
                     dict(type='Normalize', **img_norm_cfg),
                     dict(type='ImageToTensor', keys=['img']),
                     dict(type='Collect', keys=['img']),

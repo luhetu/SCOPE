@@ -2,7 +2,7 @@
 """Patch pycocotools numpy compatibility issues"""
 import re
 
-cocoeval_file = '/home2/dnrx52/anaconda3/envs/vitseg/lib/python3.7/site-packages/pycocotools/cocoeval.py'
+cocoeval_file = '/home3/dnrx52/anaconda3/envs/vitseg/lib/python3.7/site-packages/pycocotools/cocoeval.py'
 
 with open(cocoeval_file, 'r') as f:
     content = f.read()

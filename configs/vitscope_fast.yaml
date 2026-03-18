@@ -1,7 +1,7 @@
 # configs/vitscope_fast.yaml - Fast training configuration (simplified data augmentation)
 task: cls
-model: vitscope
-data_dir: /home2/dnrx52/vitcope
+model: vitscope_nocls
+data_dir: /home3/dnrx52/vitcope
 bs: 768                # Moderate batch size
 num_workers: 4
 size: 224

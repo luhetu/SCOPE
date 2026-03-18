@@ -25,16 +25,21 @@ class CoPE(nn.Module):
         # q:           [B, H, N, D_head]
         # attn_logits: [B, H, N, N]
         # 1) gate = sigmoid(mean over last dim)
+        import torch.nn.functional as F
         gate = torch.sigmoid(attn_logits.mean(dim=-1))  # [B, H, N]
         # 2) dynamic pos = flip–cumsum–flip
         pos = gate.flip(-1).cumsum(dim=-1).flip(-1)
-        pos = pos.clamp(0, self.npos_max-1)
+        target_len = attn_logits.shape[-1]
+        pos_emb = self.pos_emb
+        if pos_emb.shape[-1] != target_len:
+            pos_emb = F.interpolate(pos_emb, size=target_len, mode='linear', align_corners=False)
+        pos = pos.clamp(0, target_len - 1)
         # 3) floor/ceil + weights
         f = pos.floor().long()
         c = pos.ceil().long()
         w = (pos - f).unsqueeze(-1)  # [B, H, N, 1]
         # 4) lookup embeddings
-        emb2d = self.pos_emb[0].transpose(0,1)  # [npos_max, dim_head]
+        emb2d = pos_emb[0].transpose(0,1)  # [npos_max, dim_head]
         B,H,N = f.shape
         f_idx = f.reshape(-1)
         c_idx = c.reshape(-1)
@@ -115,11 +120,11 @@ class Attention(nn.Module):
 # Transformer & ViTcope (remove CLS, mean pooling)
 # ————————————————
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim, num_patches, dropout=0.):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, num_tokens, dropout=0.):
         super().__init__()
         self.layers = nn.ModuleList([
             nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads, dim_head, num_patches, dropout)),
+                PreNorm(dim, Attention(dim, heads, dim_head, num_tokens, dropout)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout))
             ]) for _ in range(depth)
         ])
@@ -134,6 +139,7 @@ class ViTcope(nn.Module):
     def __init__(self, *, image_size, patch_size,
                  num_classes, dim, depth, heads, mlp_dim,
                  pool='mean', channels=3, dim_head=64,
+                 use_cls_token=False,
                  dropout=0., emb_dropout=0.):
         super().__init__()
         H,W = pair(image_size)
@@ -141,6 +147,7 @@ class ViTcope(nn.Module):
         assert H%pH==0 and W%pW==0
         N = (H//pH)*(W//pW)
         patch_dim = channels * pH * pW
+        num_tokens = N + (1 if use_cls_token else 0)
 
         # patch embedding
         self.to_patch = nn.Sequential(
@@ -149,12 +156,18 @@ class ViTcope(nn.Module):
         )
         self.dropout    = nn.Dropout(emb_dropout)
         # pure CoPE transformer
-        self.transformer= Transformer(dim, depth, heads, dim_head, mlp_dim, N, dropout)
+        self.transformer= Transformer(dim, depth, heads, dim_head, mlp_dim, num_tokens, dropout)
         self.pool       = pool
+        self.use_cls_token = use_cls_token
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
         self.mlp_head   = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, num_classes))
 
     def forward(self, img):
         x = self.to_patch(img)         # [B, N, dim]
+        if self.use_cls_token:
+            cls = self.cls_token.expand(x.size(0), -1, -1)
+            x = torch.cat((cls, x), dim=1)
         x = self.dropout(x)
         x = self.transformer(x)        # [B, N, dim]
         x = x.mean(dim=1) if self.pool=='mean' else x[:,0]

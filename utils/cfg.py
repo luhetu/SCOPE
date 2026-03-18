@@ -8,6 +8,7 @@ def load_cfg(parser):
     """
     # 先解析命令行参数
     args = parser.parse_args()
+    cli_model = getattr(args, 'model', None)
     
     # 如果指定了Configuration文件，Load并覆盖
     if args.cfg and os.path.isfile(args.cfg):
@@ -20,8 +21,10 @@ def load_cfg(parser):
             # 确保数值类型参数被正确Convert
             if key in ['lr', 'min_lr']:
                 value = float(value)
-            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'warmup_epochs', 'dim_head']:
+            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'dim_head']:
                 value = int(value)
+            elif key in ['warmup_epochs']:
+                value = float(value)
             elif key in ['amp', 'aug', 'nowandb']:
                 value = bool(value)
             elif key in ['pretrained'] and value == 'null':
@@ -29,6 +32,9 @@ def load_cfg(parser):
             setattr(args, key, value)
         
         print(f"✅ [cfg] SuccessLoad {len(cfg)} 个参数")
+        if cli_model is not None:
+            args.model = cli_model
+            print(f"✅ [cfg] Override model from CLI: {cli_model}")
     elif args.cfg:
         print(f"⚠️  [cfg] Configuration文件不存在：{args.cfg}")
     

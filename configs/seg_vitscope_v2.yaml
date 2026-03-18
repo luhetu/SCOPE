@@ -8,7 +8,7 @@ bs: 16  # 🔧 Optimization 1: increased from 8 to 16, speeds up training 1.5x
 pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth  # 🔧 Optimization 2: use CoPE pre-trained weights (unified)
 
 # ViT+SCoPE configuration (Tiny - paper aligned)
-size: 512
+size: 224
 patch: 16  # ViT-Tiny configuration
 dim: 192   # ViT-Tiny configuration
 depth: 12  # ViT-Tiny configuration

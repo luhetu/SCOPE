@@ -3,7 +3,7 @@ task: det
 model: vit
 
 # Data configuration
-data_dir: /home2/dnrx52/copeondet/datasets/coco
+data_dir: /home3/dnrx52/copeondet/datasets/coco
 bs: 8
 pretrained: ./checkpoint/vit_pretrained.pth
 img_scale: [768, 768]  # COCO standard resolution
