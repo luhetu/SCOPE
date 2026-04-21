@@ -1,0 +1,24 @@
+task: det
+model: vitcope
+data_dir: /tmp/vitcope
+bs: 16
+pretrained: ./checkpoint/pretrained/COPE/vitcope_cls_size224_patch16_dim384_depth12_best.pth  # 73.20%
+img_scale: [1333, 800]
+size: 224
+patch: 16
+dim: 384
+depth: 12
+heads: 6
+mlp_dim: 1536
+dim_head: 64
+use_cls_token: false
+pool: mean
+n_epochs: 12  # 1x schedule
+lr: 1e-4  # 1e-4 * (bs/16) with bs=16
+min_lr: 0.000001
+warmup_iters: 1000
+weight_decay: 0.05
+opt: adamw
+betas: [0.9, 0.999]
+amp: true
+nowandb: false
