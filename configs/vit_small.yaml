@@ -1,8 +1,8 @@
 task: cls
 model: vit
 dataset: imagenet
-data_dir: /home3/dnrx52/vitcope
-bs: 256
+data_dir: /tmp/vitcope
+bs: 768
 size: 224
 n_epochs: 300
 patch: 16
@@ -10,9 +10,9 @@ dim: 384
 depth: 12
 heads: 6
 mlp_dim: 1536
-lr: 2.5e-4  # 1e-3 * (bs/1024) with bs=256
+lr: 7.5e-4  # 1e-3 * (bs/1024) with bs=768
 min_lr: 0
-warmup_epochs: 0
+warmup_epochs: 5
 weight_decay: 0.05
 betas: [0.9, 0.999]
 lrschedule: one_cycle_cosine
@@ -25,5 +25,6 @@ random_erasing: true
 repeated_augmentations: true
 label_smoothing: true
 stochastic_depth: true
+drop_path_rate: 0.1
 nowandb: false
 

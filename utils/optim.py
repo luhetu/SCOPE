@@ -1,12 +1,32 @@
-import math, torch
+import math
+import torch
+
+
+def _as_betas(value, default=(0.9, 0.999)):
+    if value is None:
+        return default
+
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return tuple(float(v) for v in value)
+
+    return default
 
 def build_optimizer(model, args):
     if args.opt == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05, betas=(0.9, 0.999))
+        weight_decay = float(getattr(args, "weight_decay", 0.05))
+        betas = _as_betas(getattr(args, "betas", None))
+        return torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=weight_decay,
+            betas=betas,
+        )
     elif args.opt == "adam":
-        return torch.optim.Adam(model.parameters(), lr=args.lr)
+        betas = _as_betas(getattr(args, "betas", None))
+        return torch.optim.Adam(model.parameters(), lr=args.lr, betas=betas)
     elif args.opt == "sgd":
-        return torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4, nesterov=True)
+        weight_decay = float(getattr(args, "weight_decay", 1e-4))
+        return torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=weight_decay, nesterov=True)
     else:
         raise ValueError(f"Unknown optimizer: {args.opt}")
 

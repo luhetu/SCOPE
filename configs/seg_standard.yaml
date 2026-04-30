@@ -8,10 +8,13 @@ model: vitcope
 # Data configuration
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
 bs: 4
-pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
+pretrained: ./checkpoint/vitcope_cls_size224_patch16_dim192_depth12_0421_235647_best.pth  # 68.13%
 
-# Backbone configuration (Tiny)
-size: 512
+# Backbone/pretrain configuration (Tiny ImageNet checkpoint size)
+size: 224
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 16
 dim: 192
 depth: 12
@@ -21,11 +24,13 @@ dim_head: 64
 
 # Training configuration (~80k iters for ADE20K when bs=4)
 n_epochs: 16
-lr: 3e-5
+lr: 1.5e-5
 min_lr: 0
-warmup_epochs: 0.3
+warmup_iters: 1500
 weight_decay: 0.01
 opt: adamw
 amp: false
 nowandb: false
+use_cls_token: false
+drop_path_rate: 0.1
 

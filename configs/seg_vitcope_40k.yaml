@@ -4,11 +4,14 @@ model: vitcope
 
 # Data configuration
 data_dir: ./datasets/ADE20K/ADEChallengeData2016
-bs: 16  # Optimization: increased from 8 to 16 to accelerate training
-pretrained: ./checkpoint/pretrained/vitcope_pretrained.pth
+bs: 16
+pretrained: ./checkpoint/vitcope_cls_size224_patch16_dim192_depth12_0421_235647_best.pth  # 68.13%
 
 # ViT+CoPE configuration (Tiny)
 size: 224
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 16  # ViT-Tiny configuration
 dim: 192   # ViT-Tiny configuration
 depth: 12  # ViT-Tiny configuration
@@ -17,14 +20,17 @@ mlp_dim: 768  # ViT-Tiny configuration
 dim_head: 64
 
 # Training configuration (40k iterations - paper standard settings)
+max_iters: 40000
 n_epochs: 32  # 32 epochs × 1263 iters/epoch ≈ 40k iterations
 lr: 6e-5  # Learning rate for bs=16
 min_lr: 0
-warmup_epochs: 0.9
+warmup_iters: 1500
 weight_decay: 0.01
 opt: adamw
 amp: false
 nowandb: false
+use_cls_token: false
+drop_path_rate: 0.1
 
 # Paper reference:
 # "We adopt UperNet and train for 40K iterations or 160K for longer training"

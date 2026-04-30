@@ -1,6 +1,7 @@
 task: det
 model: vitscope
-data_dir: /tmp/vitcope
+data_dir: /home3/dnrx52/SCOPE/datasets/coco
+
 bs: 8
 pretrained: ./checkpoint/pretrained/SCOPE/scopetiny.pth  # 65.34%
 img_scale: [1333, 800]
@@ -21,3 +22,5 @@ opt: adamw
 betas: [0.9, 0.999]
 amp: true
 nowandb: false
+use_cls_token: false
+drop_path_rate: 0.0

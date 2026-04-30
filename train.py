@@ -4,6 +4,9 @@ import argparse
 import sys
 import warnings
 import os
+import json
+import time
+import subprocess
 
 # Set environment variables to reduce output
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
@@ -23,7 +26,18 @@ def check_environment(args):
     """Check if current environment is suitable for running the specified task"""
     import torch
     
-    task = args.task
+    task = getattr(args, "task", None)
+    if task is None:
+        print("\n" + "=" * 60)
+        print("❌ Configuration Error")
+        print("=" * 60)
+        print("Missing required field: `task`")
+        print(f"cfg argument: {getattr(args, 'cfg', '') or '(empty)'}")
+        print("Please ensure:")
+        print("  1) --cfg points to an existing yaml file")
+        print("  2) the yaml contains `task: cls|seg|det`")
+        print("=" * 60 + "\n")
+        sys.exit(1)
     pytorch_version = torch.__version__
     python_version = "{}.{}".format(sys.version_info.major, sys.version_info.minor)
     
@@ -53,6 +67,56 @@ def check_environment(args):
         print(f"✅ Classification environment (Python {python_version}, PyTorch {pytorch_version})")
 
 
+def _run_cmd(cmd):
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return proc.stdout.strip()
+    except Exception:
+        return ""
+
+
+def save_run_snapshot(args):
+    run_tag = time.strftime("%m%d_%H%M%S")
+    args.run_tag = run_tag
+    os.makedirs("logs/run_meta", exist_ok=True)
+    snapshot_path = os.path.join("logs", "run_meta", f"{run_tag}_{args.task}_{args.model}.json")
+    cfg_text = ""
+    if getattr(args, "cfg", "") and os.path.isfile(args.cfg):
+        try:
+            with open(args.cfg, "r", encoding="utf-8") as f:
+                cfg_text = f.read()
+        except Exception:
+            cfg_text = ""
+    payload = {
+        "run_tag": run_tag,
+        "timestamp": int(time.time()),
+        "cfg_path": getattr(args, "cfg", ""),
+        "resolved_args": vars(args),
+        "cfg_raw_text": cfg_text,
+        "git_head": _run_cmd(["git", "rev-parse", "HEAD"]),
+        "git_status_short": _run_cmd(["git", "status", "--short"]),
+    }
+    with open(snapshot_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    print(f"🧾 Saved run snapshot: {snapshot_path}")
+    # #region agent log
+    debug_payload = {
+        "sessionId": "a67f17",
+        "runId": os.environ.get("DEBUG_RUN_ID", "pre-fix"),
+        "hypothesisId": "H10",
+        "location": "train.py:save_run_snapshot",
+        "message": "Saved run snapshot with resolved args and git status",
+        "data": {"snapshot_path": snapshot_path, "run_tag": run_tag},
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open("/home3/dnrx52/SCOPE/.cursor/debug-a67f17.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(debug_payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified ViT/CoPE/SCoPE Trainer")
     parser.add_argument("--cfg", type=str, default="", help="YAML config path")
@@ -68,6 +132,7 @@ def main():
     
     # ✅ Check environment
     check_environment(args)
+    save_run_snapshot(args)
 
     # ✅ Intelligently handle training configuration: classification/detection use epochs, segmentation uses iterations
     if args.task == 'seg':
@@ -77,11 +142,20 @@ def main():
         
         iters_per_epoch = num_images // args.bs
         
-        # Convert epochs to iterations
-        args.max_iters = args.n_epochs * iters_per_epoch
+        # ADE20K papers usually report 40K/160K schedules. Prefer an explicit
+        # iteration budget from YAML; keep epoch conversion for older configs.
+        explicit_max_iters = getattr(args, 'max_iters', None)
+        if explicit_max_iters is not None:
+            args.max_iters = int(explicit_max_iters)
+            approx_epochs = args.max_iters / max(iters_per_epoch, 1)
+        else:
+            args.max_iters = int(args.n_epochs * iters_per_epoch)
+            approx_epochs = float(args.n_epochs)
         
-        # Calculate warmup_iters (if warmup_epochs is configured)
-        if hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
+        # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
+        if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
+            args.warmup_iters = int(args.warmup_iters)
+        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
             args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 1500  # Default warmup
@@ -95,7 +169,11 @@ def main():
         print(f"  Training images: {num_images:,}")
         print(f"  Batch Size: {args.bs}")
         print(f"  Iterations per epoch: {iters_per_epoch:,}")
-        print(f"  Configured epochs: {args.n_epochs}")
+        if explicit_max_iters is not None:
+            print(f"  Configured schedule: explicit {args.max_iters:,} iterations")
+            print(f"  Approx epochs: {approx_epochs:.2f}")
+        else:
+            print(f"  Configured epochs: {args.n_epochs}")
         print(f"  ➜ max_iters: {args.max_iters:,}")
         if hasattr(args, 'warmup_epochs'):
             print(f"  Warmup epochs: {args.warmup_epochs}")
@@ -107,8 +185,10 @@ def main():
         num_images = 118287
         iters_per_epoch = num_images // args.bs
         
-        # Calculate warmup_iters
-        if hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
+        # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
+        if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
+            args.warmup_iters = int(args.warmup_iters)
+        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
             args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 500  # Default warmup
@@ -157,7 +237,8 @@ def main():
     
     # Print different training length information based on task type
     if args.task == 'seg':
-        print(f"  Training iterations: {args.max_iters:,} ({args.n_epochs} epochs)")
+        approx_epochs = getattr(args, 'max_iters', 0) / max(getattr(args, 'iters_per_epoch', 1), 1)
+        print(f"  Training iterations: {args.max_iters:,} (~{approx_epochs:.2f} epochs)")
     elif args.task == 'det':
         print(f"  Training epochs: {args.n_epochs} (epoch-based)")
     else:

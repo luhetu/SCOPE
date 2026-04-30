@@ -1,19 +1,46 @@
 # -*- coding: utf-8 -*-
 """
 Semantic Segmentation Task
-Based on the MMSegmentation framework, supporting Swin/ViT/CoPE/SCoPE as backbones.
+MMSegmentation + ViT / ViT-CoPE / ViT-SCoPE backbone.
+
+This version:
+1. Explicitly registers ViTBackbone / ViTCoPEBackbone / ViTSCoPEBackbone.
+2. Aligns downstream backbone config with classification backbone naming.
+3. Loads classification checkpoint into backbone with simple key prefix mapping.
+4. Avoids EvalHook and TextLoggerHook collision that causes KeyError: 'data_time'.
 """
+
 import os
 import time
 import torch
+
 from mmcv import Config
-from mmcv.runner import get_dist_info, init_dist
 from mmseg.apis import set_random_seed, train_segmentor
 from mmseg.datasets import build_dataset
 from mmseg.models import build_segmentor
-from mmseg.utils import get_root_logger
+from mmseg.models.builder import BACKBONES as MMSEG_BACKBONES
 
-# WandB optional dependency
+from models.vit_backbone import (
+    ViTBackbone,
+    ViTCoPEBackbone,
+    ViTSCoPEBackbone,
+)
+
+
+def _register_backbone_once(name, module):
+    if name in MMSEG_BACKBONES.module_dict:
+        print(f"✅ [MMSEG Registry] {name} already registered")
+        return
+
+    MMSEG_BACKBONES.register_module(name=name, module=module)
+    print(f"✅ [MMSEG Registry] registered {name}")
+
+
+_register_backbone_once("ViTBackbone", ViTBackbone)
+_register_backbone_once("ViTCoPEBackbone", ViTCoPEBackbone)
+_register_backbone_once("ViTSCoPEBackbone", ViTSCoPEBackbone)
+
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -21,210 +48,260 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
+def _as_betas(value, default=(0.9, 0.999)):
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return tuple(float(v) for v in value)
+    return default
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        print(f"\n🔧 Segmentation Task Init")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.run_name = self._build_run_name()
+
+        print("\n🔧 Segmentation Task Init")
+        print(f"   model: {args.model}")
         print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
-        
-        # WandB (needs to be set before building config)
-        self.use_wandb = WANDB_AVAILABLE and not args.nowandb
-        
-        # Build MMSegmentation configuration
+
+        self.use_wandb = WANDB_AVAILABLE and not getattr(args, "nowandb", False)
+
         self.cfg = self._build_mmseg_config()
-        
-        # Set random seed
-        if hasattr(args, 'seed'):
+
+        if hasattr(args, "seed") and args.seed is not None:
             set_random_seed(args.seed, deterministic=True)
-        
-        # Build model
+
         self.model = build_segmentor(
             self.cfg.model,
-            train_cfg=self.cfg.get('train_cfg'),
-            test_cfg=self.cfg.get('test_cfg')
+            train_cfg=self.cfg.get("train_cfg"),
+            test_cfg=self.cfg.get("test_cfg"),
         )
-        
-        # Load pretrained weights (if provided)
-        if hasattr(args, 'pretrained') and args.pretrained:
+
+        if hasattr(args, "pretrained") and args.pretrained:
             print(f"\n🔧 Loading pretrained weights: {args.pretrained}")
             self._load_pretrained_backbone(args.pretrained)
         else:
-            print(f"⚠️  Training from scratch (no pretrained weights)")
-        
-        # Build dataset
+            print("⚠️  Training from scratch: no pretrained weights provided.")
+
         self.datasets = [build_dataset(self.cfg.data.train)]
-        
-        # WandB
+        self.model.CLASSES = self.datasets[0].CLASSES
+
         if self.use_wandb:
-            # Unified project name as dataset-experiments
             project_name = "ade20k-experiments"
-            
-            # Run name contains model, task, and key hyper-parameters
-            watermark = f"{args.model}_upernet_size{args.size}_bs{args.bs}_lr{args.lr}"
-            
+            watermark = (
+                f"{self.run_name}_size{args.size}_patch{args.patch}_"
+                f"dim{getattr(args, 'dim', getattr(args, 'embed_dim', 'na'))}_"
+                f"bs{args.bs}_lr{args.lr}"
+            )
             wandb.init(project=project_name, name=watermark)
             wandb.config.update(vars(args))
-        elif not WANDB_AVAILABLE and not args.nowandb:
-            print("WARNING: WandB not installed, skipping logging")
-        
-        # Set model classes
-        self.model.CLASSES = self.datasets[0].CLASSES
-        
-    def _build_mmseg_config(self):
-        """Build MMSegmentation configuration from args."""
+        elif not WANDB_AVAILABLE and not getattr(args, "nowandb", False):
+            print("WARNING: WandB not installed, skipping WandB logging.")
+
+    # ------------------------------------------------------- #
+    def _build_run_name(self):
         args = self.args
-        
-        # Base configuration
+        cfg_path = getattr(args, "cfg", "")
+        cfg_name = os.path.splitext(os.path.basename(cfg_path))[0] if cfg_path else ""
+        if not cfg_name:
+            dim = getattr(args, "dim", getattr(args, "embed_dim", "na"))
+            cfg_name = f"{args.model}_seg_dim{dim}"
+
+        run_tag = getattr(args, "run_tag", None)
+        return f"{cfg_name}_{run_tag}" if run_tag else cfg_name
+
+    # ------------------------------------------------------- #
+    def _build_mmseg_config(self):
+        args = self.args
         cfg = Config()
-        
-        # ==================== Model config ==================== #
+
         cfg.model = self._get_upernet_config()
-        
-        # ==================== Dataset config ==================== #
         cfg.data = self._get_data_config()
-        
-        # ==================== Optimizer config ==================== #
+
         cfg.optimizer = dict(
-            type='AdamW',
+            type="AdamW",
             lr=args.lr,
-            betas=(0.9, 0.999),
-            weight_decay=args.weight_decay
+            betas=_as_betas(getattr(args, "betas", None)),
+            weight_decay=getattr(args, "weight_decay", 0.01),
+            paramwise_cfg=dict(
+                custom_keys={
+                    "pos_embedding": dict(decay_mult=0.0),
+                    "cls_token": dict(decay_mult=0.0),
+                    "norm": dict(decay_mult=0.0),
+                }
+            ),
         )
+
         cfg.optimizer_config = dict(grad_clip=None)
-        
-        # ==================== LR schedule ==================== #
-        warmup_iters = getattr(args, 'warmup_iters', None)
+
+        if bool(getattr(args, "amp", False)):
+            cfg.fp16 = dict(loss_scale="dynamic")
+            print("✅ MMSeg fp16 enabled: cfg.fp16 = dynamic loss scale")
+
+        max_iters = getattr(args, "max_iters", None)
+        if max_iters is None:
+            max_iters = int(getattr(args, "n_epochs", 32) * 1000)
+
+        warmup_iters = getattr(args, "warmup_iters", None)
         if warmup_iters is None:
-            warmup_iters = int(getattr(args, 'warmup_epochs', 0) * 1000)
+            warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
+
+        cfg.runner = dict(
+            type="IterBasedRunner",
+            max_iters=max_iters,
+        )
+
         cfg.lr_config = dict(
-            policy='poly',
-            warmup='linear',
+            policy="poly",
+            warmup="linear" if warmup_iters > 0 else None,
             warmup_iters=warmup_iters,
             warmup_ratio=1e-6,
             power=1.0,
-            min_lr=args.min_lr,
-            by_epoch=False
+            min_lr=getattr(args, "min_lr", 0.0),
+            by_epoch=False,
         )
-        
-        # ==================== Runner config (iter-based, single GPU) ==================== #
-        max_iters = getattr(args, 'max_iters', None)
-        if max_iters is None:
-            max_iters = int(args.n_epochs * 1000)
-        cfg.runner = dict(type='IterBasedRunner', max_iters=max_iters)
-        
-        # ==================== Checkpoint config ==================== #
-        # Save format: {model}_{task}_iter_{iter}.pth
-        model_name = args.model
-        task_name = args.task or 'seg'
+
+        model_name = self.run_name
+        task_name = args.task or "seg"
+
         cfg.checkpoint_config = dict(
             by_epoch=False,
-            interval=5000,
-            filename_tmpl=f'{model_name}_{task_name}_iter_{{}}.pth'
+            interval=int(getattr(args, "checkpoint_interval", 5000)),
+            filename_tmpl=f"{model_name}_{task_name}_iter_{{}}.pth",
+            max_keep_ckpts=3,
         )
-        
-        # ==================== Evaluation config ==================== #
+
+        # --------------------------------------------------- #
+        # IMPORTANT FIX:
+        # Avoid EvalHook and TextLoggerHook triggering at same iter.
+        # Old mmseg/mmcv can throw KeyError: 'data_time'.
+        # --------------------------------------------------- #
+        log_interval = int(getattr(args, "log_interval", 100))
+        eval_interval = int(getattr(args, "eval_interval", 2001))
+
+        if eval_interval % log_interval == 0:
+            eval_interval += 1
+
         cfg.evaluation = dict(
-            interval=2000,      # evaluate every 2000 iters
-            metric='mIoU',
+            interval=eval_interval,
+            metric="mIoU",
             pre_eval=True,
-            save_best='mIoU',
-            classwise=False     # disable per-class detailed output
+            save_best="mIoU",
+            classwise=False,
         )
-        
-        # ==================== Logging config ==================== #
+
         cfg.log_config = dict(
-            interval=100,  # log every 100 iters
+            interval=log_interval,
             hooks=[
-                dict(type='TextLoggerHook', by_epoch=False),
-            ]
+                dict(type="TextLoggerHook", by_epoch=False),
+            ],
         )
-        
-        # Avoid evaluation interval colliding with logging intervals (100)
-        cfg.evaluation.interval = 2001
-        
-        # ==================== Custom hooks (progress bar + WandB) ==================== #
-        cfg.custom_hooks = [
-            dict(type='SegProgressBarHook'),  # segmentation-specific progress bar
-            dict(type='SimpleWandBHook', use_wandb=self.use_wandb, log_interval=100),
-        ]
-        
-        # ==================== Misc config ==================== #
-        cfg.dist_params = dict(backend='nccl')
-        cfg.log_level = 'INFO'
-        cfg.work_dir = f'./work_dirs/{args.model}_upernet'
-        cfg.load_from = None       # do not use MMSeg auto loading
-        cfg.gpu_ids = [0]          # single GPU training
+
+        cfg.custom_hooks = []
+
+        cfg.dist_params = dict(backend="nccl")
+        cfg.log_level = "INFO"
+        cfg.work_dir = f"./work_dirs/{self.run_name}_upernet"
+        cfg.load_from = None
         cfg.resume_from = None
-        cfg.workflow = [('train', 1)]
+        cfg.workflow = [("train", 1)]
+        cfg.gpu_ids = [0]
         cfg.cudnn_benchmark = True
-        cfg.seed = getattr(args, 'seed', None)
-        
+        cfg.seed = getattr(args, "seed", None)
+
+        print("\n✅ MMSeg config summary")
+        print(f"   max_iters: {max_iters}")
+        print(f"   warmup_iters: {warmup_iters}")
+        print(f"   log_interval: {log_interval}")
+        print(f"   eval_interval: {eval_interval}")
+        print(f"   lr: {args.lr}")
+        print(f"   weight_decay: {getattr(args, 'weight_decay', 0.01)}")
+        print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
+        print(f"   img_scale: {getattr(args, 'img_scale', [2048, 512])}")
+        print(f"   test_img_scale: {getattr(args, 'test_img_scale', [2048, 512])}")
+        default_head_channels = min(self._get_backbone_out_channels()[0], 512)
+        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', default_head_channels)}")
+        print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', 256)}")
+        print(f"   work_dir: {cfg.work_dir}")
+
         return cfg
-    
+
+    # ------------------------------------------------------- #
     def _get_upernet_config(self):
-        """Build UPerNet model configuration (encoder-decoder for semantic segmentation)."""
-        args = self.args
-        
-        # Backbone config
         backbone_cfg = self._get_backbone_config()
-        
-        # Decode head (UPerNet)
         in_channels = self._get_backbone_out_channels()
+        default_head_channels = min(int(in_channels[0]), 512)
+        head_channels = int(getattr(self.args, "seg_head_dim", default_head_channels))
+
         decode_head_cfg = dict(
-            type='UPerHead',
+            type="UPerHead",
             in_channels=in_channels,
             in_index=[0, 1, 2, 3],
             pool_scales=(1, 2, 3, 6),
-            channels=512,
+            channels=head_channels,
             dropout_ratio=0.1,
-            num_classes=150,  # ADE20K has 150 classes
-            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),  # GroupNorm works with bs=1
+            num_classes=150,
+            norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
             align_corners=False,
             loss_decode=dict(
-                type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0)
+                type="CrossEntropyLoss",
+                use_sigmoid=False,
+                loss_weight=1.0,
+            ),
         )
-        
-        # Auxiliary head
+
         auxiliary_head_cfg = dict(
-            type='FCNHead',
-            in_channels=in_channels[2],  # use the 3rd feature level
-            in_index=2,
-            channels=256,
+            type="FCNHead",
+            in_channels=in_channels[3],
+            in_index=3,
+            channels=int(getattr(self.args, "seg_aux_dim", 256)),
             num_convs=1,
             concat_input=False,
             dropout_ratio=0.1,
             num_classes=150,
-            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+            norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
             align_corners=False,
             loss_decode=dict(
-                type='CrossEntropyLoss', use_sigmoid=False, loss_weight=0.4)
+                type="CrossEntropyLoss",
+                use_sigmoid=False,
+                loss_weight=0.4,
+            ),
         )
-        
-        # Training and testing settings
-        train_cfg = dict()
-        test_cfg = dict(mode='whole')
-        
+
         model = dict(
-            type='EncoderDecoder',
+            type="EncoderDecoder",
             pretrained=None,
             backbone=backbone_cfg,
             decode_head=decode_head_cfg,
             auxiliary_head=auxiliary_head_cfg,
-            train_cfg=train_cfg,
-            test_cfg=test_cfg
+            train_cfg=dict(),
+            test_cfg=dict(mode="whole"),
         )
-        
+
         return model
-    
+
+    # ------------------------------------------------------- #
     def _get_backbone_config(self):
-        """Build backbone configuration according to model type."""
         args = self.args
-        
-        if args.model == 'swin':
+
+        common = dict(
+            image_size=args.size,
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=getattr(args, "dim_head", 64),
+            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
+            fpn_adapter_style="resize",
+        )
+
+        if args.model == "swin":
             return dict(
-                type='SwinTransformer',
+                type="SwinTransformer",
                 embed_dim=args.embed_dim,
                 depths=args.depths,
                 num_heads=args.num_heads,
@@ -232,266 +309,256 @@ class SegmentationTask:
                 mlp_ratio=4,
                 qkv_bias=True,
                 qk_scale=None,
-                drop_rate=0.,
-                attn_drop_rate=0.,
-                drop_path_rate=args.drop_path_rate,
+                drop_rate=0.0,
+                attn_drop_rate=0.0,
+                drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
                 ape=False,
                 patch_norm=True,
                 out_indices=(0, 1, 2, 3),
-                use_checkpoint=False
+                use_checkpoint=False,
             )
-        elif args.model == 'vit':
+
+        if args.model == "vit":
             return dict(
-                type='ViTBackbone',
-                image_size=args.size,
-                patch_size=args.patch,
-                dim=args.dim,
-                depth=args.depth,
-                heads=args.heads,
-                mlp_dim=args.mlp_dim,
-                dim_head=getattr(args, 'dim_head', 64),
-                out_indices=(2, 5, 8, 11)
+                type="ViTBackbone",
+                **common,
             )
-        elif args.model == 'vitcope':
+
+        if args.model == "vitcope":
             return dict(
-                type='ViTCoPEBackbone',
-                image_size=args.size,
-                patch_size=args.patch,
-                dim=args.dim,
-                depth=args.depth,
-                heads=args.heads,
-                mlp_dim=args.mlp_dim,
-                dim_head=getattr(args, 'dim_head', 64),
-                out_indices=(2, 5, 8, 11)
+                type="ViTCoPEBackbone",
+                use_cls_token=bool(getattr(args, "use_cls_token", False)),
+                **common,
             )
-        elif args.model == 'vitscope':
+
+        if args.model == "vitscope":
             return dict(
-                type='ViTSCoPEBackbone',
-                image_size=args.size,
-                patch_size=args.patch,
-                dim=args.dim,
-                depth=args.depth,
-                heads=args.heads,
-                mlp_dim=args.mlp_dim,
-                dim_head=getattr(args, 'dim_head', 64),
-                out_indices=(2, 5, 8, 11)
+                type="ViTSCoPEBackbone",
+                **common,
             )
-        else:
-            raise ValueError(f"Unknown model: {args.model}")
-    
+
+        raise ValueError(f"Unknown segmentation backbone model: {args.model}")
+
+    # ------------------------------------------------------- #
     def _get_backbone_out_channels(self):
-        """Get the output channels of the backbone stages."""
         args = self.args
-        
-        if args.model == 'swin':
-            # Swin-Tiny: [96, 192, 384, 768]
+
+        if args.model == "swin":
             base_dim = args.embed_dim
             return [base_dim * (2 ** i) for i in range(4)]
-        else:
-            # ViT family: all feature maps have the same channel dimension
-            return [args.dim] * 4
-    
+
+        return [args.dim] * 4
+
+    # ------------------------------------------------------- #
     def _get_data_config(self):
-        """Build dataset configuration for ADE20K."""
         args = self.args
-        
-        # Image normalization
+
+        def _pair_from_arg(name, default):
+            value = getattr(args, name, default)
+            if isinstance(value, (tuple, list)):
+                if len(value) != 2:
+                    raise ValueError(f"{name} must have two values, got {value}")
+                return (int(value[0]), int(value[1]))
+            return (int(value), int(value))
+
         img_norm_cfg = dict(
             mean=[123.675, 116.28, 103.53],
             std=[58.395, 57.12, 57.375],
-            to_rgb=True
+            to_rgb=True,
         )
-        
-        crop_size = (args.size, args.size)
-        
-        # Training pipeline
+
+        # Scratching follows XCiT/Swin ADE20K UPerNet protocol:
+        # 512x512 crop with long-side img_scale (2048, 512), while args.size
+        # still describes the ImageNet pretraining/backbone setup.
+        crop_size = _pair_from_arg("crop_size", 512)
+        img_scale = _pair_from_arg("img_scale", (2048, 512))
+        test_img_scale = _pair_from_arg("test_img_scale", img_scale)
+
         train_pipeline = [
-            dict(type='LoadImageFromFile'),
-            dict(type='LoadAnnotations', reduce_zero_label=True),
-            dict(type='Resize', img_scale=(args.size * 2, args.size), ratio_range=(0.5, 2.0)),
-            dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
-            dict(type='RandomFlip', prob=0.5),
-            dict(type='PhotoMetricDistortion'),
-            dict(type='Normalize', **img_norm_cfg),
-            dict(type='Pad', size=crop_size, pad_val=0, seg_pad_val=255),
-            dict(type='DefaultFormatBundle'),
-            dict(type='Collect', keys=['img', 'gt_semantic_seg']),
-        ]
-        
-        # Test / validation pipeline
-        test_pipeline = [
-            dict(type='LoadImageFromFile'),
+            dict(type="LoadImageFromFile"),
+            dict(type="LoadAnnotations", reduce_zero_label=True),
             dict(
-                type='MultiScaleFlipAug',
-                img_scale=(args.size, args.size),  # fixed scale to match ViT patching
+                type="Resize",
+                img_scale=img_scale,
+                ratio_range=(0.5, 2.0),
+            ),
+            dict(type="RandomCrop", crop_size=crop_size, cat_max_ratio=0.75),
+            dict(type="RandomFlip", prob=0.5),
+            dict(type="PhotoMetricDistortion"),
+            dict(type="Normalize", **img_norm_cfg),
+            dict(type="Pad", size=crop_size, pad_val=0, seg_pad_val=255),
+            dict(type="DefaultFormatBundle"),
+            dict(type="Collect", keys=["img", "gt_semantic_seg"]),
+        ]
+
+        test_pipeline = [
+            dict(type="LoadImageFromFile"),
+            dict(
+                type="MultiScaleFlipAug",
+                img_scale=test_img_scale,
                 flip=False,
                 transforms=[
-                    dict(type='Resize', keep_ratio=False),  # force exact size
-                    dict(type='Normalize', **img_norm_cfg),
-                    dict(type='ImageToTensor', keys=['img']),
-                    dict(type='Collect', keys=['img']),
-                ])
+                    dict(type="Resize", keep_ratio=True),
+                    dict(type="Pad", size_divisor=int(getattr(args, "patch", 16))),
+                    dict(type="Normalize", **img_norm_cfg),
+                    dict(type="ImageToTensor", keys=["img"]),
+                    dict(type="Collect", keys=["img"]),
+                ],
+            ),
         ]
-        
+
         data = dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=4,
+            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
             train=dict(
-                type='ADE20KDataset',
+                type="ADE20KDataset",
                 data_root=args.data_dir,
-                img_dir='images/training',
-                ann_dir='annotations/training',
-                pipeline=train_pipeline
+                img_dir="images/training",
+                ann_dir="annotations/training",
+                pipeline=train_pipeline,
             ),
             val=dict(
-                type='ADE20KDataset',
+                type="ADE20KDataset",
                 data_root=args.data_dir,
-                img_dir='images/validation',
-                ann_dir='annotations/validation',
-                pipeline=test_pipeline
+                img_dir="images/validation",
+                ann_dir="annotations/validation",
+                pipeline=test_pipeline,
             ),
             test=dict(
-                type='ADE20KDataset',
+                type="ADE20KDataset",
                 data_root=args.data_dir,
-                img_dir='images/validation',
-                ann_dir='annotations/validation',
-                pipeline=test_pipeline
-            )
+                img_dir="images/validation",
+                ann_dir="annotations/validation",
+                pipeline=test_pipeline,
+            ),
         )
-        
+
         return data
-    
+
+    # ------------------------------------------------------- #
+    def _extract_state_dict(self, checkpoint):
+        if "model" in checkpoint:
+            print("   Using checkpoint['model']")
+            return checkpoint["model"]
+
+        if "state_dict" in checkpoint:
+            print("   Using checkpoint['state_dict']")
+            return checkpoint["state_dict"]
+
+        print("   Using checkpoint directly")
+        return checkpoint
+
+    # ------------------------------------------------------- #
+    def _load_pretrained_backbone(self, pretrained_path):
+        print(f"\n{'=' * 60}")
+        print("🔧 PRETRAINED LOADING DEBUG")
+        print(f"{'=' * 60}")
+        print(f"📦 Pretrained path: {pretrained_path}")
+        print(f"   File exists: {os.path.exists(pretrained_path)}")
+
+        if not os.path.exists(pretrained_path):
+            print("⚠️  Pretrained weights not found. Training from scratch.")
+            print(f"{'=' * 60}\n")
+            return
+
+        checkpoint = torch.load(pretrained_path, map_location="cpu")
+        print("✅ Checkpoint loaded")
+        print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
+
+        pretrained_dict = self._extract_state_dict(checkpoint)
+
+        print(f"   Total pretrained keys: {len(pretrained_dict)}")
+        print(f"   Sample keys: {list(pretrained_dict.keys())[:5]}")
+
+        backbone_dict = {}
+        skipped = []
+
+        for k, v in pretrained_dict.items():
+            if k.startswith("module."):
+                k = k[len("module."):]
+            if k.startswith("net."):
+                k = k[len("net."):]
+            if k.startswith("model."):
+                k = k[len("model."):]
+
+            if (
+                k.startswith("mlp_head.")
+                or k.startswith("head.")
+                or k.startswith("fc.")
+                or "classifier" in k
+            ):
+                skipped.append(k)
+                continue
+
+            new_key = k if k.startswith("backbone.") else f"backbone.{k}"
+            backbone_dict[new_key] = v
+
+        model_dict = self.model.state_dict()
+
+        matched = {}
+        unmatched = []
+
+        for k, v in backbone_dict.items():
+            if k in model_dict and model_dict[k].shape == v.shape:
+                matched[k] = v
+            else:
+                if k in model_dict:
+                    unmatched.append(
+                        f"{k} shape mismatch: ckpt={tuple(v.shape)} model={tuple(model_dict[k].shape)}"
+                    )
+                else:
+                    unmatched.append(f"{k} not in model")
+
+        print("\n📊 Matching results")
+        print(f"   After mapping: {len(backbone_dict)} keys")
+        print(f"   Matched: {len(matched)} keys")
+        print(f"   Unmatched: {len(unmatched)} keys")
+        print(f"   Skipped classifier keys: {len(skipped)}")
+
+        if len(matched) > 0:
+            print("\n✅ Sample matched keys:")
+            for k in list(matched.keys())[:5]:
+                print(f"     {k}")
+
+        if len(unmatched) > 0:
+            print("\n⚠️ Sample unmatched keys:")
+            for k in unmatched[:10]:
+                print(f"     {k}")
+
+        model_dict.update(matched)
+        self.model.load_state_dict(model_dict, strict=False)
+
+        match_rate = 100.0 * len(matched) / max(1, len(backbone_dict))
+        print(f"\n✅ FINAL: Loaded {len(matched)}/{len(backbone_dict)} backbone keys ({match_rate:.1f}%)")
+
+        min_match_rate = float(getattr(self.args, "min_pretrained_match_rate", 80.0))
+        if match_rate < min_match_rate:
+            print("\n❌ ERROR: Low match rate. Check whether classification and backbone structures are aligned.")
+            model_backbone_keys = [k for k in model_dict.keys() if k.startswith("backbone.")]
+            print(f"   Sample ckpt mapped key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
+            print(f"   Sample model key: {model_backbone_keys[0] if model_backbone_keys else 'NONE'}")
+            raise RuntimeError(
+                f"Pretrained backbone match rate {match_rate:.1f}% is below "
+                f"required {min_match_rate:.1f}% for {pretrained_path}"
+            )
+
+        print(f"{'=' * 60}\n")
+
+    # ------------------------------------------------------- #
     def train(self):
-        """Start training segmentation model."""
         print(f"🚀 Start training {self.args.model} + UPerNet on ADE20K\n")
-        
-        # Call MMSegmentation training API
+
         train_segmentor(
             self.model,
             self.datasets,
             self.cfg,
             distributed=False,
             validate=True,
-            timestamp=time.strftime('%Y%m%d_%H%M%S', time.localtime()),
-            meta=dict()
+            timestamp=time.strftime("%Y%m%d_%H%M%S", time.localtime()),
+            meta=dict(),
         )
-        
-        print(f"\n✅ Training finished!\n")
-        
+
+        print("\n✅ Segmentation training finished!\n")
+
         if self.use_wandb:
             wandb.finish()
-    
-    def _load_pretrained_backbone(self, pretrained_path):
-        """Load backbone weights from a classifier checkpoint."""
-        import os
-        print(f"\n{'='*60}")
-        print(f"🔧 PRETRAINED LOADING DEBUG")
-        print(f"{'='*60}")
-        print(f"📦 Pretrained path: {pretrained_path}")
-        print(f"   File exists: {os.path.exists(pretrained_path)}")
-        
-        if not os.path.exists(pretrained_path):
-            print(f"⚠️  Pretrained weights not found!")
-            print(f"   Training from scratch...")
-            print(f"{'='*60}\n")
-            return
-        
-        # Load classifier checkpoint
-        checkpoint = torch.load(pretrained_path, map_location='cpu')
-        print(f"✅ Checkpoint loaded")
-        print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
-        
-        # Extract actual state dict (support multiple formats)
-        if 'model' in checkpoint:
-            pretrained_dict = checkpoint['model']
-            print(f"   Using checkpoint['model']")
-        elif 'state_dict' in checkpoint:
-            pretrained_dict = checkpoint['state_dict']
-            print(f"   Using checkpoint['state_dict']")
-        else:
-            pretrained_dict = checkpoint
-            print(f"   Using checkpoint directly")
-        
-        print(f"   Total pretrained keys: {len(pretrained_dict)}")
-        print(f"   Sample keys: {list(pretrained_dict.keys())[:3]}")
-        
-        # Filter and remap keys, only keep backbone-related params
-        backbone_dict = {}
-        skipped_keys = []
-        for k, v in pretrained_dict.items():
-            # Skip classification heads and CLS token
-            if 'mlp_head' in k or 'head' in k or 'fc' in k or 'cls_token' in k:
-                skipped_keys.append(k)
-                continue
-            
-            new_k = k
-            
-            # 1. transformer.layers.X.Y -> transformer_blocks.X.Y
-            new_k = new_k.replace('transformer.layers', 'transformer_blocks')
-            
-            # 2. blocks.X -> transformer_blocks.X
-            if new_k.startswith('blocks.'):
-                new_k = new_k.replace('blocks.', 'transformer_blocks.', 1)
-            
-            # 3. to_patch.1 -> to_patch_embedding.1
-            if new_k.startswith('to_patch.'):
-                new_k = new_k.replace('to_patch.', 'to_patch_embedding.', 1)
-            
-            # 4. fn.scope.pos_emb -> fn.cope.pos_emb (for SCoPE models)
-            if 'fn.scope.pos_emb' in new_k:
-                new_k = new_k.replace('fn.scope.pos_emb', 'fn.cope.pos_emb')
-            
-            # 5. Skip cope_emb (global CoPE vs per-layer CoPE)
-            if 'cope_emb' in new_k:
-                skipped_keys.append(k)
-                continue
-            
-            # Add backbone prefix
-            new_key = f'backbone.{new_k}'
-            backbone_dict[new_key] = v
-        
-        # Load into segmentation model
-        model_dict = self.model.state_dict()
-        
-        # Check which keys match
-        matched_keys = []
-        unmatched_keys = []
-        for k, v in backbone_dict.items():
-            if k in model_dict:
-                if model_dict[k].shape == v.shape:
-                    matched_keys.append(k)
-                else:
-                    unmatched_keys.append(f"{k} (shape mismatch: {v.shape} vs {model_dict[k].shape})")
-            else:
-                unmatched_keys.append(f"{k} (not in model)")
-        
-        print(f"\n📊 Matching results:")
-        print(f"   After mapping: {len(backbone_dict)} keys")
-        print(f"   Matched: {len(matched_keys)} keys")
-        print(f"   Unmatched: {len(unmatched_keys)} keys")
-        
-        if len(matched_keys) > 0:
-            print(f"\n✅ Sample matched keys (first 3):")
-            for k in list(matched_keys)[:3]:
-                print(f"     {k}")
-        
-        if len(unmatched_keys) > 0 and len(unmatched_keys) <= 10:
-            print(f"\n⚠️  Unmatched keys:")
-            for uk in unmatched_keys[:10]:
-                print(f"     {uk}")
-        
-        # Only keep keys that exist in model and match shape
-        pretrained_dict_filtered = {k: v for k, v in backbone_dict.items() if k in matched_keys}
-        model_dict.update(pretrained_dict_filtered)
-        self.model.load_state_dict(model_dict, strict=False)
-        
-        match_rate = 100 * len(pretrained_dict_filtered) / max(1, len(backbone_dict))
-        print(f"\n✅ FINAL: Loaded {len(pretrained_dict_filtered)}/{len(backbone_dict)} layers ({match_rate:.1f}%)")
-        
-        if match_rate < 50:
-            print(f"\n⚠️  WARNING: Low match rate! Possible key format mismatch...")
-            print(f"   Sample backbone_dict key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
-            print(f"   Sample model_dict key: "
-                  f"{[k for k in model_dict.keys() if 'backbone' in k][0] if any('backbone' in k for k in model_dict.keys()) else 'NONE'}")
-        
-        print(f"{'='*60}\n")

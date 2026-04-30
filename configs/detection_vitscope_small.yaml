@@ -1,7 +1,7 @@
 task: det
 model: vitscope
-data_dir: /tmp/vitcope
-bs: 16
+data_dir: /home3/dnrx52/SCOPE/datasets/coco
+bs: 4
 pretrained: ./checkpoint/pretrained/SCOPE/scopesmall.pth  # 76.41%
 img_scale: [1333, 800]
 size: 224
@@ -13,7 +13,7 @@ mlp_dim: 1536
 dim_head: 64
 
 n_epochs: 12  # 1x schedule
-lr: 1e-4  # 1e-4 * (bs/16) with bs=16
+lr: 2.5e-5  # 1e-4 * (bs/16) with bs=4
 min_lr: 0.000001
 warmup_iters: 1000
 weight_decay: 0.05

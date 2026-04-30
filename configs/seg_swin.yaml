@@ -8,6 +8,9 @@ bs: 2  # Segmentation tasks require large memory, batch size should be small
 
 # Swin Transformer configuration
 size: 224
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 4
 embed_dim: 96
 depths: [2, 2, 6, 2]
@@ -20,6 +23,7 @@ n_epochs: 80  # 80k iterations / 1000 per epoch
 lr: 6e-5
 min_lr: 1e-6
 warmup_epochs: 1
+warmup_iters: 1500
 weight_decay: 0.01
 opt: adamw
 amp: false

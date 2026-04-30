@@ -25,4 +25,5 @@ random_erasing: true
 repeated_augmentations: true
 label_smoothing: true
 stochastic_depth: true
+drop_path_rate: 0.1
 nowandb: false

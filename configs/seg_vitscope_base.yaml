@@ -4,17 +4,24 @@ data_dir: ./datasets/ADE20K/ADEChallengeData2016
 bs: 16
 pretrained: ./checkpoint/pretrained/SCOPE/scopebasedp2.pth
 size: 224
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 16
 dim: 768
 depth: 12
 heads: 12
 mlp_dim: 3072
 dim_head: 64
+
+# ADE20K UPerNet 40K protocol; n_epochs is kept as an approximate reference.
+max_iters: 40000
 n_epochs: 32
 lr: 6e-5
 min_lr: 0
-warmup_epochs: 0.9
+warmup_iters: 1500
 weight_decay: 0.01
 opt: adamw
 amp: true
 nowandb: false
+drop_path_rate: 0.1

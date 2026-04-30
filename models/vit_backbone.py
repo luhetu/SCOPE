@@ -1,17 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-ViT as Backbone for Object Detection
-Transform ViT into a multi-scale feature extractor for object detection
+ViT / ViT-CoPE / ViT-SCoPE backbones for MMSegmentation and MMDetection.
+
+Core idea:
+- Keep the internal block structure aligned with classification models.
+- Only add multi-layer feature outputs for UPerNet / FPN.
 """
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
-import sys
-sys.path.append('..')
+try:
+    from timm.layers import DropPath
+except ImportError:
+    from timm.models.layers import DropPath
 
-# Register to both mmdet and mmseg BACKBONES
+
+# ---------------- Registry ----------------
 try:
     from mmdet.models.builder import BACKBONES as MMDET_BACKBONES
     MMDET_AVAILABLE = True
@@ -25,6 +33,12 @@ except ImportError:
     MMSEG_AVAILABLE = False
 
 
+# ---------------- Helpers ----------------
+def pair(t):
+    return t if isinstance(t, tuple) else (t, t)
+
+
+# ---------------- Basic Blocks ----------------
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -38,481 +52,457 @@ class PreNorm(nn.Module):
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout=0.):
         super().__init__()
+
         self.net = nn.Sequential(
             nn.Linear(dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, dim),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
         return self.net(x)
 
 
+# ---------------- Standard ViT Attention ----------------
 class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
         super().__init__()
+
         inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
 
         self.heads = heads
         self.scale = dim_head ** -0.5
-
         self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
 
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         ) if project_out else nn.Identity()
 
     def forward(self, x):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+
+        q, k, v = map(
+            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads),
+            qkv,
+        )
 
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-
         attn = self.attend(dots)
-        attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = rearrange(out, "b h n d -> b n (h d)")
+
         return self.to_out(out)
 
 
-class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
-        super().__init__()
-        self.layers = nn.ModuleList([])
-        for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
-            ]))
-
-    def forward(self, x):
-        for attn, ff in self.layers:
-            x = attn(x) + x
-            x = ff(x) + x
-        return x
-
-
-class ViTBackbone(nn.Module):
-    """
-    ViT Backbone for Object Detection and Segmentation
-    Output multi-scale feature maps for FPN/UPerNet
-    """
-    def __init__(
-        self,
-        image_size=224,
-        patch_size=16,
-        dim=768,
-        depth=12,
-        heads=12,
-        mlp_dim=3072,
-        channels=3,
-        dim_head=64,
-        dropout=0.,
-        emb_dropout=0.,
-        out_indices=(2, 5, 8, 11),  # Which layers to output features from
-    ):
-        super().__init__()
-        
-        image_height, image_width = (image_size, image_size) if isinstance(image_size, int) else image_size
-        patch_height, patch_width = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
-
-        assert image_height % patch_height == 0 and image_width % patch_width == 0
-
-        num_patches = (image_height // patch_height) * (image_width // patch_width)
-        patch_dim = channels * patch_height * patch_width
-
-        self.patch_size = patch_size
-        self.dim = dim
-        self.out_indices = out_indices
-        self.num_patches_h = image_height // patch_height
-        self.num_patches_w = image_width // patch_width
-
-        # Patch Embedding
-        self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_height, p2=patch_width),
-            nn.Linear(patch_dim, dim),
-        )
-
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.dropout = nn.Dropout(emb_dropout)
-
-        # Transformer blocks
-        self.transformer_blocks = nn.ModuleList([])
-        for _ in range(depth):
-            self.transformer_blocks.append(nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
-            ]))
-
-        # Add norm layer for each output
-        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in out_indices])
-
-    def _resize_pos_embed(self, pos_embed, img_h, img_w):
-        """
-        Interpolate position embeddings to adapt to different image sizes
-        Args:
-            pos_embed: (1, N+1, D) Original position embeddings (including cls token)
-            img_h: Input image height
-            img_w: Input image width
-        Returns:
-            (1, new_N+1, D) Interpolated position embeddings
-        """
-        import torch.nn.functional as F
-        
-        # Separate cls token and patch tokens
-        cls_pos_embed = pos_embed[:, :1, :]  # (1, 1, D)
-        patch_pos_embed = pos_embed[:, 1:, :]  # (1, N, D)
-        
-        # Calculate original patch grid size (assuming square)
-        N = patch_pos_embed.shape[1]
-        h = w = int(N ** 0.5)
-        
-        # Calculate new patch grid size (based on actual image size)
-        new_h = img_h // self.patch_size
-        new_w = img_w // self.patch_size
-        
-        # Reshape and interpolate
-        patch_pos_embed = patch_pos_embed.reshape(1, h, w, -1).permute(0, 3, 1, 2)  # (1, D, h, w)
-        patch_pos_embed = F.interpolate(
-            patch_pos_embed,
-            size=(new_h, new_w),
-            mode='bicubic',
-            align_corners=False
-        )
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, pos_embed.shape[-1])  # (1, new_N, D)
-        
-        # Concatenate back to cls token
-        return torch.cat([cls_pos_embed, patch_pos_embed], dim=1)
-
-    def forward(self, x):
-        """
-        Args:
-            x: (B, C, H, W)
-        Returns:
-            tuple of feature maps at different scales
-        """
-        b, c, h, w = x.shape
-        
-        # Patch embedding
-        patches = self.to_patch_embedding(x)
-        
-        # Add cls token
-        cls_tokens = self.cls_token.expand(b, -1, -1)
-        x = torch.cat((cls_tokens, patches), dim=1)
-        
-        # Position embedding interpolation (handle different image sizes)
-        if x.shape[1] != self.pos_embedding.shape[1]:
-            pos_embed = self._resize_pos_embed(self.pos_embedding, h, w)
-            x = x + pos_embed
-        else:
-            x = x + self.pos_embedding
-        
-        x = self.dropout(x)
-
-        # Calculate actual patch grid size
-        actual_h = h // self.patch_size
-        actual_w = w // self.patch_size
-        
-        # Pass through Transformer blocks, output features at specified layers
-        outs = []
-        for i, (attn, ff) in enumerate(self.transformer_blocks):
-            x = attn(x) + x
-            x = ff(x) + x
-            
-            if i in self.out_indices:
-                # Remove cls token, reshape to 2D feature map
-                out = x[:, 1:]  # (B, N, D)
-                out = rearrange(
-                    out, 
-                    'b (h w) d -> b d h w', 
-                    h=actual_h, 
-                    w=actual_w
-                )
-                # Apply norm
-                norm_idx = self.out_indices.index(i)
-                out_normed = rearrange(out, 'b d h w -> b h w d')
-                out_normed = self.norms[norm_idx](out_normed)
-                out = rearrange(out_normed, 'b h w d -> b d h w')
-                # Create a simple pyramid by downsampling per level index
-                if len(self.out_indices) > 1:
-                    import torch.nn.functional as F
-                    target_h = max(1, actual_h // (2 ** norm_idx))
-                    target_w = max(1, actual_w // (2 ** norm_idx))
-                    if out.shape[-2:] != (target_h, target_w):
-                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
-                outs.append(out)
-
-        return tuple(outs)
-
-    def init_weights(self, pretrained=None):
-        """Initialize weights"""
-        if pretrained:
-            # TODO: load pretrained weights
-            pass
-        else:
-            # Initialize with default
-            pass
-
-
+# ---------------- CoPE ----------------
 class CoPE(nn.Module):
-    """Contextual Position Encoding"""
     def __init__(self, npos_max, dim_head):
         super().__init__()
+
         self.npos_max = npos_max
         self.dim_head = dim_head
+
         self.pos_emb = nn.Parameter(torch.zeros(1, dim_head, npos_max))
         nn.init.xavier_uniform_(self.pos_emb)
 
     def forward(self, q, attn_logits):
-        import torch.nn.functional as F
-        gate = torch.sigmoid(attn_logits.mean(dim=-1))
+        # q: [B, H, N, D]
+        # attn_logits: [B, H, N, N]
+        gate = torch.sigmoid(attn_logits.mean(dim=-1))  # [B, H, N]
+
         pos = gate.flip(-1).cumsum(dim=-1).flip(-1)
 
-        # Dynamically interpolate pos_emb to current sequence length
         target_len = attn_logits.shape[-1]
         pos_emb = self.pos_emb
+
         if pos_emb.shape[-1] != target_len:
-            pos_emb = F.interpolate(pos_emb, size=target_len, mode='linear', align_corners=False)
+            pos_emb = F.interpolate(
+                pos_emb,
+                size=target_len,
+                mode="linear",
+                align_corners=False,
+            )
+
         pos = pos.clamp(0, target_len - 1)
+
         f = pos.floor().long()
         c = pos.ceil().long()
         w = (pos - f).unsqueeze(-1)
-        emb2d = pos_emb[0].transpose(0,1)
-        B,H,N = f.shape
-        f_idx = f.reshape(-1)
-        c_idx = c.reshape(-1)
-        e_f = emb2d.index_select(0, f_idx).view(B,H,N,self.dim_head)
-        e_c = emb2d.index_select(0, c_idx).view(B,H,N,self.dim_head)
+
+        table = pos_emb[0].transpose(0, 1)
+
+        B, H, N = f.shape
+
+        e_f = table.index_select(0, f.reshape(-1)).view(B, H, N, self.dim_head)
+        e_c = table.index_select(0, c.reshape(-1)).view(B, H, N, self.dim_head)
+
         offset = e_f * (1 - w) + e_c * w
-        return offset
+
+        return offset, gate
 
 
+# ---------------- CoPE Attention: aligned with models/vitcope.py ----------------
 class AttentionCoPE(nn.Module):
-    """Attention with CoPE"""
-    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.):
+    def __init__(self, dim, heads=8, dim_head=64, num_tokens=196, dropout=0.):
         super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
+
+        inner = dim_head * heads
+
         self.heads = heads
         self.scale = dim_head ** -0.5
+
+        self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
+        self.cope = CoPE(npos_max=num_tokens, dim_head=dim_head)
         self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.cope = CoPE(npos_max=num_patches, dim_head=dim_head)
+
         self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
+            nn.Linear(inner, dim),
+            nn.Dropout(dropout),
+        )
 
     def forward(self, x):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        logits = torch.matmul(q, k.transpose(-1,-2)) * self.scale
-        offset = self.cope(q, logits)
-        q2 = q + offset
-        dots = torch.matmul(q2, k.transpose(-1,-2)) * self.scale
-        attn = self.attend(dots)
-        attn = self.dropout(attn)
+
+        q, k, v = map(
+            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads),
+            qkv,
+        )
+
+        logits = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+
+        offset, _ = self.cope(q, logits)
+
+        q = q + offset
+
+        new_logits = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        attn = self.attend(new_logits)
+
         out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = rearrange(out, "b h n d -> b n (h d)")
+
         return self.to_out(out)
 
 
-class HKPool(nn.Module):
-    """HK pool mechanism - dynamically align to patch grid"""
+# ---------------- Dynamic HKGate: aligned names with classification hk_gate ----------------
+class HKGate(nn.Module):
+    """
+    Dynamic version of classification HKGate.
+
+    Same learnable params:
+    - alpha
+    - beta
+
+    But output grid is computed from input H/W, so it works for seg/det.
+    """
     def __init__(self, patch_size=16):
         super().__init__()
+
         self.patch_size = patch_size
+
         self.global_avgpool = nn.AdaptiveAvgPool2d(1)
         self.alpha = nn.Parameter(torch.tensor(0.1))
+
         self.max4 = nn.MaxPool2d(4, 4)
         self.beta = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, x):
-        # x: [B,C,H,W]
+        # x: [B, 3, H, W]
         B, C, H, W = x.shape
-        
-        # Calculate target patch grid size (dynamic)
+
         h_p = H // self.patch_size
         w_p = W // self.patch_size
-        
+
         mu = self.global_avgpool(x)
-        x = x + (1 + self.alpha) * (x - mu)  # Contrast enhancement
-        x = self.max4(x)  # Downsample
-        x = self.max4(x)  # Downsample again
-        
-        # Dynamically align to (h_p, w_p)
-        x = torch.nn.functional.adaptive_avg_pool2d(x, (h_p, w_p))
-        x = x.mean(dim=1)  # [B, h_p, w_p]
-        gate = x.flatten(1)  # [B, N]
-        
-        # Per-sample normalize to (0,1)
-        gate = (gate - gate.mean(dim=1, keepdim=True)) / (gate.std(dim=1, keepdim=True) + 1e-5)
+
+        x = x + (1 + self.alpha) * (x - mu)
+
+        x = self.max4(x)
+        x = self.max4(x)
+
+        x = F.adaptive_avg_pool2d(x, (h_p, w_p))
+        x = x.mean(dim=1)
+
+        gate = x.flatten(1)
+
+        gate = (gate - gate.mean(dim=1, keepdim=True)) / (
+            gate.std(dim=1, keepdim=True) + 1e-5
+        )
+
         gate = torch.sigmoid(self.beta * gate)
-        return gate  # [B, N] ∈ (0,1)
+
+        return gate
 
 
+# ---------------- SCoPE Attention: aligned with models/vitscope_nocls.py ----------------
 class AttentionSCoPE(nn.Module):
-    """Attention with SCoPE - Q-offset + λ convex combination fusion + CLS gate (aligned with vitscope.py)"""
     def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.):
         super().__init__()
-        inner_dim = dim_head * heads
+
+        inner = dim_head * heads
+
         self.heads = heads
         self.scale = dim_head ** -0.5
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.cope = CoPE(npos_max=num_patches + 1, dim_head=dim_head)  # +1 includes CLS
-        self.lam = nn.Parameter(torch.tensor(0.5))  # Learn λ for convex combination
+
+        self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
+
+        self.cope = CoPE(
+            npos_max=num_patches + 1,
+            dim_head=dim_head,
+        )
+
+        self.lam = nn.Parameter(torch.tensor(0.5))
+
         self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
+            nn.Linear(inner, dim),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x, hk_gate_1d):
-        # x: [B,1+N,dim], hk_gate_1d: [B,N] (aligned to patches)
+        # x: [B, 1 + N, dim]
+        # hk_gate_1d: [B, N]
         B, N_all, _ = x.shape
+
+        assert hk_gate_1d.shape[1] == N_all - 1, (
+            f"HKGate length should equal patch tokens. "
+            f"Got hk_gate={hk_gate_1d.shape[1]}, tokens={N_all - 1}."
+        )
+
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
-        dots = torch.matmul(q, k.transpose(-1,-2)) * self.scale  # [B,H,N_all,N_all]
-        offset = self.cope(q, dots)  # offset:[B,H,N_all,D]
-        cope_gate = torch.sigmoid(dots.mean(dim=-1))  # [B,H,N_all]
+        q, k, v = map(
+            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads),
+            qkv,
+        )
 
-        # CLS gate from CoPE column 0 (multi-head average), concatenated with HKGate
-        cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)  # [B,1]
-        hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)  # [B,N_all]
-        hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)  # [B,H,N_all]
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
-        # Convex combination fusion (avoid secondary sigmoid flattening dynamic range)
-        lam = torch.sigmoid(self.lam)  # (0,1)
-        fused_gate = lam * cope_gate + (1 - lam) * hk_full  # [B,H,N_all] ∈ (0,1)
+        offset, cope_gate = self.cope(q, dots)
 
-        q_new = q + offset * fused_gate.unsqueeze(-1)  # Q-offset with gate
-        attn = torch.softmax(torch.matmul(q_new, k.transpose(-1,-2)) * self.scale, dim=-1)
-        out = torch.matmul(attn, v)  # [B,H,N_all,D]
-        return self.to_out(rearrange(out, 'b h n d -> b n (h d)'))
+        # NoCLS-aware version: CLS gate is neutral 1.0
+        cls_gate = hk_gate_1d.new_ones((B, 1))
+
+        hk_full = torch.cat([cls_gate, hk_gate_1d], dim=1)
+        hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)
+
+        lam = torch.sigmoid(self.lam)
+
+        fused_gate = lam * cope_gate + (1 - lam) * hk_full
+
+        q = q + offset * fused_gate.unsqueeze(-1)
+
+        attn = torch.softmax(
+            torch.matmul(q, k.transpose(-1, -2)) * self.scale,
+            dim=-1,
+        )
+
+        out = torch.matmul(attn, v)
+        out = rearrange(out, "b h n d -> b n (h d)")
+
+        return self.to_out(out)
 
 
-class ViTCoPEBackbone(nn.Module):
-    """ViT with CoPE for Object Detection and Segmentation"""
+# ---------------- Transformer Containers ----------------
+class Transformer(nn.Module):
+    """
+    Standard transformer container.
+    Name is transformer.layers to align with classification checkpoints.
+    """
     def __init__(
         self,
-        image_size=224,
-        patch_size=16,
-        dim=768,
-        depth=12,
-        heads=12,
-        mlp_dim=3072,
-        channels=3,
-        dim_head=64,
+        dim,
+        depth,
+        heads,
+        dim_head,
+        mlp_dim,
+        attention_type="vit",
+        num_tokens=196,
+        num_patches=196,
         dropout=0.,
-        emb_dropout=0.,
-        out_indices=(2, 5, 8, 11),
+        drop_path_rate=0.,
     ):
         super().__init__()
-        
-        image_height, image_width = (image_size, image_size) if isinstance(image_size, int) else image_size
-        patch_height, patch_width = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
-        assert image_height % patch_height == 0 and image_width % patch_width == 0
-        
-        num_patches = (image_height // patch_height) * (image_width // patch_width)
-        patch_dim = channels * patch_height * patch_width
-        
-        self.patch_size = patch_size
-        self.dim = dim
-        self.out_indices = out_indices
-        self.num_patches_h = image_height // patch_height
-        self.num_patches_w = image_width // patch_width
-        
-        # Patch Embedding
-        self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_height, p2=patch_width),
-            nn.Linear(patch_dim, dim),
-        )
-        
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.dropout = nn.Dropout(emb_dropout)
-        
-        # Transformer blocks with CoPE
-        self.transformer_blocks = nn.ModuleList([])
-        for _ in range(depth):
-            self.transformer_blocks.append(nn.ModuleList([
-                PreNorm(dim, AttentionCoPE(dim, heads=heads, dim_head=dim_head, num_patches=num_patches, dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
+
+        dpr = torch.linspace(0, drop_path_rate, depth).tolist()
+
+        self.layers = nn.ModuleList([])
+
+        for i in range(depth):
+            if attention_type == "vit":
+                attn = Attention(
+                    dim,
+                    heads=heads,
+                    dim_head=dim_head,
+                    dropout=dropout,
+                )
+            elif attention_type == "cope":
+                attn = AttentionCoPE(
+                    dim,
+                    heads=heads,
+                    dim_head=dim_head,
+                    num_tokens=num_tokens,
+                    dropout=dropout,
+                )
+            else:
+                raise ValueError(f"Unknown attention_type: {attention_type}")
+
+            self.layers.append(nn.ModuleList([
+                PreNorm(dim, attn),
+                PreNorm(dim, FeedForward(dim, mlp_dim, dropout)),
+                DropPath(dpr[i]) if dpr[i] > 0. else nn.Identity(),
+                DropPath(dpr[i]) if dpr[i] > 0. else nn.Identity(),
             ]))
-        
-        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in out_indices])
-    
-    def _resize_pos_embed(self, pos_embed, img_h, img_w):
-        """Interpolate position embeddings to adapt to different image sizes"""
-        import torch.nn.functional as F
-        cls_pos_embed = pos_embed[:, :1, :]
-        patch_pos_embed = pos_embed[:, 1:, :]
-        N = patch_pos_embed.shape[1]
-        h = w = int(N ** 0.5)
-        new_h = img_h // self.patch_size
-        new_w = img_w // self.patch_size
-        patch_pos_embed = patch_pos_embed.reshape(1, h, w, -1).permute(0, 3, 1, 2)
-        patch_pos_embed = F.interpolate(patch_pos_embed, size=(new_h, new_w), mode='bicubic', align_corners=False)
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, pos_embed.shape[-1])
-        return torch.cat([cls_pos_embed, patch_pos_embed], dim=1)
-    
+
+
+class TransformerSCoPE(nn.Module):
+    """
+    SCoPE transformer container.
+    Name is transformer.layers to align with classification checkpoints.
+    """
+    def __init__(
+        self,
+        dim,
+        depth,
+        heads,
+        dim_head,
+        mlp_dim,
+        num_patches=196,
+        dropout=0.,
+        drop_path_rate=0.,
+    ):
+        super().__init__()
+
+        dpr = torch.linspace(0, drop_path_rate, depth).tolist()
+
+        self.layers = nn.ModuleList([])
+
+        for i in range(depth):
+            self.layers.append(nn.ModuleList([
+                PreNorm(
+                    dim,
+                    AttentionSCoPE(
+                        dim,
+                        heads=heads,
+                        dim_head=dim_head,
+                        num_patches=num_patches,
+                        dropout=dropout,
+                    ),
+                ),
+                PreNorm(dim, FeedForward(dim, mlp_dim, dropout)),
+                DropPath(dpr[i]) if dpr[i] > 0. else nn.Identity(),
+                DropPath(dpr[i]) if dpr[i] > 0. else nn.Identity(),
+            ]))
+
+
+# ---------------- Feature Output Helper ----------------
+class ResizeAdapter(nn.Module):
+    """Small MultiLevelNeck-style adapter for ViT patch-token feature maps."""
+    def __init__(self, dim, scale_factor):
+        super().__init__()
+
+        self.scale_factor = scale_factor
+        self.lateral = nn.Conv2d(dim, dim, kernel_size=1)
+        self.refine = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+
     def forward(self, x):
-        b, c, h, w = x.shape
-        patches = self.to_patch_embedding(x)
-        cls_tokens = self.cls_token.expand(b, -1, -1)
-        x = torch.cat((cls_tokens, patches), dim=1)
-        
-        # Position embedding 插Value
-        if x.shape[1] != self.pos_embedding.shape[1]:
-            pos_embed = self._resize_pos_embed(self.pos_embedding, h, w)
-            x = x + pos_embed
+        x = self.lateral(x)
+
+        if self.scale_factor != 1:
+            x = F.interpolate(
+                x,
+                scale_factor=self.scale_factor,
+                mode="bilinear",
+                align_corners=False,
+                recompute_scale_factor=True,
+            )
+
+        return self.refine(x)
+
+
+class SimpleFPNAdapter(nn.Module):
+    """ViTDet-style simple feature pyramid adapter."""
+    def __init__(self, dim, scale):
+        super().__init__()
+
+        if scale == 4:
+            self.net = nn.Sequential(
+                nn.ConvTranspose2d(dim, dim, kernel_size=2, stride=2),
+                nn.GELU(),
+                nn.ConvTranspose2d(dim, dim, kernel_size=2, stride=2),
+                nn.GELU(),
+                nn.Conv2d(dim, dim, kernel_size=1),
+            )
+        elif scale == 2:
+            self.net = nn.Sequential(
+                nn.ConvTranspose2d(dim, dim, kernel_size=2, stride=2),
+                nn.GELU(),
+                nn.Conv2d(dim, dim, kernel_size=1),
+            )
+        elif scale == 1:
+            self.net = nn.Conv2d(dim, dim, kernel_size=1)
+        elif scale == 0.5:
+            self.net = nn.Sequential(
+                nn.MaxPool2d(kernel_size=2, stride=2),
+                nn.Conv2d(dim, dim, kernel_size=1),
+            )
         else:
-            x = x + self.pos_embedding
-        
-        x = self.dropout(x)
-        
-        # Calculate actual patch grid size
-        actual_h = h // self.patch_size
-        actual_w = w // self.patch_size
-        
-        outs = []
-        for i, (attn, ff) in enumerate(self.transformer_blocks):
-            x = attn(x) + x
-            x = ff(x) + x
-            
-            if i in self.out_indices:
-                out = x[:, 1:]
-                out = rearrange(out, 'b (h w) d -> b d h w', h=actual_h, w=actual_w)
-                norm_idx = self.out_indices.index(i)
-                out_normed = rearrange(out, 'b d h w -> b h w d')
-                out_normed = self.norms[norm_idx](out_normed)
-                out = rearrange(out_normed, 'b h w d -> b d h w')
-                if len(self.out_indices) > 1:
-                    import torch.nn.functional as F
-                    target_h = max(1, actual_h // (2 ** norm_idx))
-                    target_w = max(1, actual_w // (2 ** norm_idx))
-                    if out.shape[-2:] != (target_h, target_w):
-                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
-                outs.append(out)
-        
-        return tuple(outs)
-    
-    def init_weights(self, pretrained=None):
-        pass
+            raise ValueError(f"Unsupported SimpleFPN scale: {scale}")
+
+    def forward(self, x):
+        return self.net(x)
 
 
-class ViTSCoPEBackbone(nn.Module):
-    """ViT with SCoPE for Object Detection and Segmentation"""
+class BackboneFeatureMixin:
+    def _build_simple_fpn_adapters(self, dim, adapter_style="simple_fpn"):
+        if len(self.out_indices) != 4:
+            return nn.ModuleList([nn.Identity() for _ in self.out_indices])
+
+        scales = [4, 2, 1, 0.5]
+
+        if adapter_style == "resize":
+            # Mirrors MMSeg's ViT + MultiLevelNeck scales [4, 2, 1, 0.5].
+            adapter_cls = ResizeAdapter
+        elif adapter_style == "simple_fpn":
+            # Mirrors ViTDet's SimpleFeaturePyramid scale factors.
+            adapter_cls = SimpleFPNAdapter
+        else:
+            raise ValueError(f"Unknown fpn_adapter_style: {adapter_style}")
+
+        return nn.ModuleList([
+            adapter_cls(dim, scale)
+            for scale in scales
+        ])
+
+    def _tokens_to_map(self, x, actual_h, actual_w, has_cls):
+        if has_cls:
+            x = x[:, 1:]
+
+        return rearrange(
+            x,
+            "b (h w) d -> b d h w",
+            h=actual_h,
+            w=actual_w,
+        )
+
+    def _format_out(self, x, actual_h, actual_w, norm_idx, has_cls):
+        out = self._tokens_to_map(x, actual_h, actual_w, has_cls=has_cls)
+
+        out = rearrange(out, "b d h w -> b h w d")
+        out = self.norms[norm_idx](out)
+        out = rearrange(out, "b h w d -> b d h w")
+        out = self.fpn_adapters[norm_idx](out)
+
+        return out
+
+
+# ---------------- ViT Backbone: aligned with models/vit.py ----------------
+class ViTBackbone(nn.Module, BackboneFeatureMixin):
     def __init__(
         self,
         image_size=224,
@@ -525,120 +515,361 @@ class ViTSCoPEBackbone(nn.Module):
         dim_head=64,
         dropout=0.,
         emb_dropout=0.,
+        drop_path_rate=0.,
         out_indices=(2, 5, 8, 11),
+        fpn_adapter_style="simple_fpn",
     ):
         super().__init__()
-        
-        image_height, image_width = (image_size, image_size) if isinstance(image_size, int) else image_size
-        patch_height, patch_width = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
-        assert image_height % patch_height == 0 and image_width % patch_width == 0
-        
+
+        image_height, image_width = pair(image_size)
+        patch_height, patch_width = pair(patch_size)
+
+        assert image_height % patch_height == 0
+        assert image_width % patch_width == 0
+
         num_patches = (image_height // patch_height) * (image_width // patch_width)
         patch_dim = channels * patch_height * patch_width
-        
+
         self.patch_size = patch_size
         self.dim = dim
-        self.out_indices = out_indices
-        self.num_patches_h = image_height // patch_height
-        self.num_patches_w = image_width // patch_width
-        
-        # Patch Embedding
+        self.out_indices = tuple(out_indices)
+
         self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_height, p2=patch_width),
+            Rearrange(
+                "b c (h p1) (w p2) -> b (h w) (p1 p2 c)",
+                p1=patch_height,
+                p2=patch_width,
+            ),
             nn.Linear(patch_dim, dim),
         )
-        
+
         self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
-        
-        # CNN Gate - dynamically align to patch grid
-        self.hk_pool = HKPool(patch_size=patch_size)  # ✅ Pass patch_size for dynamic calculation
-        
-        # Transformer blocks with SCoPE
-        self.transformer_blocks = nn.ModuleList([])
-        for _ in range(depth):
-            self.transformer_blocks.append(nn.ModuleList([
-                PreNorm(dim, AttentionSCoPE(dim, heads=heads, dim_head=dim_head, num_patches=num_patches, dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
-            ]))
-        
-        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in out_indices])
-    
+
+        self.transformer = Transformer(
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            dim_head=dim_head,
+            mlp_dim=mlp_dim,
+            attention_type="vit",
+            num_tokens=num_patches + 1,
+            num_patches=num_patches,
+            dropout=dropout,
+            drop_path_rate=drop_path_rate,
+        )
+
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(dim)
+            for _ in self.out_indices
+        ])
+        self.fpn_adapters = self._build_simple_fpn_adapters(
+            dim,
+            adapter_style=fpn_adapter_style,
+        )
+
     def _resize_pos_embed(self, pos_embed, img_h, img_w):
-        """Interpolate position embeddings to adapt to different image sizes"""
-        import torch.nn.functional as F
-        cls_pos_embed = pos_embed[:, :1, :]
-        patch_pos_embed = pos_embed[:, 1:, :]
+        cls_pos_embed = pos_embed[:, :1]
+        patch_pos_embed = pos_embed[:, 1:]
+
         N = patch_pos_embed.shape[1]
-        h = w = int(N ** 0.5)
+        old_h = old_w = int(N ** 0.5)
+
         new_h = img_h // self.patch_size
         new_w = img_w // self.patch_size
-        patch_pos_embed = patch_pos_embed.reshape(1, h, w, -1).permute(0, 3, 1, 2)
-        patch_pos_embed = F.interpolate(patch_pos_embed, size=(new_h, new_w), mode='bicubic', align_corners=False)
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).reshape(1, -1, pos_embed.shape[-1])
+
+        patch_pos_embed = patch_pos_embed.reshape(
+            1, old_h, old_w, -1
+        ).permute(0, 3, 1, 2)
+
+        patch_pos_embed = F.interpolate(
+            patch_pos_embed,
+            size=(new_h, new_w),
+            mode="bicubic",
+            align_corners=False,
+        )
+
+        patch_pos_embed = patch_pos_embed.permute(
+            0, 2, 3, 1
+        ).reshape(1, -1, pos_embed.shape[-1])
+
         return torch.cat([cls_pos_embed, patch_pos_embed], dim=1)
-    
+
     def forward(self, img):
-        # img: Original image input [B, C, H, W]
-        b, c, h, w = img.shape
-        
-        # 1. HK Gate from original image (aligned with vitscope.py)
-        hk_gate_1d = self.hk_pool(img)  # [B, N] ✅ Use original image!
-        
-        # 2. Patch embedding
-        patches = self.to_patch_embedding(img)
-        cls_tokens = self.cls_token.expand(b, -1, -1)
-        x = torch.cat((cls_tokens, patches), dim=1)  # [B, 1+N, dim]
-        
-        # 3. Position embedding interpolation
+        B, C, H, W = img.shape
+
+        actual_h = H // self.patch_size
+        actual_w = W // self.patch_size
+
+        x = self.to_patch_embedding(img)
+
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, x], dim=1)
+
         if x.shape[1] != self.pos_embedding.shape[1]:
-            pos_embed = self._resize_pos_embed(self.pos_embedding, h, w)
+            pos_embed = self._resize_pos_embed(self.pos_embedding, H, W)
             x = x + pos_embed
         else:
             x = x + self.pos_embedding
-        
+
         x = self.dropout(x)
-        
-        # Calculate actual patch grid size
-        actual_h = h // self.patch_size
-        actual_w = w // self.patch_size
-        
-        # 4. Transformer with hk_gate_1d
+
         outs = []
-        for i, (attn, ff) in enumerate(self.transformer_blocks):
-            x = attn(x, hk_gate_1d) + x  # ✅ Pass hk_gate_1d, not hk_feat!
-            x = ff(x) + x
-            
+
+        for i, (attn, ff, drop_path1, drop_path2) in enumerate(self.transformer.layers):
+            x = x + drop_path1(attn(x))
+            x = x + drop_path2(ff(x))
+
             if i in self.out_indices:
-                out = x[:, 1:]
-                out = rearrange(out, 'b (h w) d -> b d h w', h=actual_h, w=actual_w)
                 norm_idx = self.out_indices.index(i)
-                out_normed = rearrange(out, 'b d h w -> b h w d')
-                out_normed = self.norms[norm_idx](out_normed)
-                out = rearrange(out_normed, 'b h w d -> b d h w')
-                if len(self.out_indices) > 1:
-                    import torch.nn.functional as F
-                    target_h = max(1, actual_h // (2 ** norm_idx))
-                    target_w = max(1, actual_w // (2 ** norm_idx))
-                    if out.shape[-2:] != (target_h, target_w):
-                        out = F.interpolate(out, size=(target_h, target_w), mode='bilinear', align_corners=False)
-                outs.append(out)
-        
+                outs.append(
+                    self._format_out(
+                        x,
+                        actual_h,
+                        actual_w,
+                        norm_idx,
+                        has_cls=True,
+                    )
+                )
+
         return tuple(outs)
-    
+
     def init_weights(self, pretrained=None):
         pass
 
 
+# ---------------- ViT-CoPE Backbone: aligned with models/vitcope.py ----------------
+class ViTCoPEBackbone(nn.Module, BackboneFeatureMixin):
+    def __init__(
+        self,
+        image_size=224,
+        patch_size=16,
+        dim=768,
+        depth=12,
+        heads=12,
+        mlp_dim=3072,
+        channels=3,
+        dim_head=64,
+        use_cls_token=False,
+        dropout=0.,
+        emb_dropout=0.,
+        drop_path_rate=0.,
+        out_indices=(2, 5, 8, 11),
+        fpn_adapter_style="simple_fpn",
+    ):
+        super().__init__()
 
-# ==================== Register to MMDetection and MMSegmentation ==================== #
+        image_height, image_width = pair(image_size)
+        patch_height, patch_width = pair(patch_size)
+
+        assert image_height % patch_height == 0
+        assert image_width % patch_width == 0
+
+        num_patches = (image_height // patch_height) * (image_width // patch_width)
+        patch_dim = channels * patch_height * patch_width
+        num_tokens = num_patches + (1 if use_cls_token else 0)
+
+        self.patch_size = patch_size
+        self.dim = dim
+        self.out_indices = tuple(out_indices)
+        self.use_cls_token = use_cls_token
+
+        # IMPORTANT: name aligned with classification vitcope.py
+        self.to_patch = nn.Sequential(
+            Rearrange(
+                "b c (h p1) (w p2) -> b (h w) (p1 p2 c)",
+                p1=patch_height,
+                p2=patch_width,
+            ),
+            nn.Linear(patch_dim, dim),
+        )
+
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+        self.dropout = nn.Dropout(emb_dropout)
+
+        # IMPORTANT: name aligned with classification vitcope.py
+        self.transformer = Transformer(
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            dim_head=dim_head,
+            mlp_dim=mlp_dim,
+            attention_type="cope",
+            num_tokens=num_tokens,
+            num_patches=num_patches,
+            dropout=dropout,
+            drop_path_rate=drop_path_rate,
+        )
+
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(dim)
+            for _ in self.out_indices
+        ])
+        self.fpn_adapters = self._build_simple_fpn_adapters(
+            dim,
+            adapter_style=fpn_adapter_style,
+        )
+
+    def forward(self, img):
+        B, C, H, W = img.shape
+
+        actual_h = H // self.patch_size
+        actual_w = W // self.patch_size
+
+        x = self.to_patch(img)
+
+        if self.use_cls_token:
+            cls = self.cls_token.expand(B, -1, -1)
+            x = torch.cat([cls, x], dim=1)
+
+        x = self.dropout(x)
+
+        outs = []
+
+        for i, (attn, ff, drop_path1, drop_path2) in enumerate(self.transformer.layers):
+            x = x + drop_path1(attn(x))
+            x = x + drop_path2(ff(x))
+
+            if i in self.out_indices:
+                norm_idx = self.out_indices.index(i)
+                outs.append(
+                    self._format_out(
+                        x,
+                        actual_h,
+                        actual_w,
+                        norm_idx,
+                        has_cls=self.use_cls_token,
+                    )
+                )
+
+        return tuple(outs)
+
+    def init_weights(self, pretrained=None):
+        pass
+
+
+# ---------------- ViT-SCoPE Backbone: aligned with models/vitscope_nocls.py ----------------
+class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
+    def __init__(
+        self,
+        image_size=224,
+        patch_size=16,
+        dim=768,
+        depth=12,
+        heads=12,
+        mlp_dim=3072,
+        channels=3,
+        dim_head=64,
+        dropout=0.,
+        emb_dropout=0.,
+        drop_path_rate=0.,
+        out_indices=(2, 5, 8, 11),
+        fpn_adapter_style="simple_fpn",
+    ):
+        super().__init__()
+
+        image_height, image_width = pair(image_size)
+        patch_height, patch_width = pair(patch_size)
+
+        assert image_height % patch_height == 0
+        assert image_width % patch_width == 0
+
+        num_patches = (image_height // patch_height) * (image_width // patch_width)
+        patch_dim = channels * patch_height * patch_width
+
+        self.patch_size = patch_size
+        self.dim = dim
+        self.out_indices = tuple(out_indices)
+
+        # IMPORTANT: name aligned with classification vitscope_nocls.py
+        self.to_patch = nn.Sequential(
+            Rearrange(
+                "b c (h p1) (w p2) -> b (h w) (p1 p2 c)",
+                p1=patch_height,
+                p2=patch_width,
+            ),
+            nn.Linear(patch_dim, dim),
+        )
+
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+        self.drop = nn.Dropout(emb_dropout)
+
+        # IMPORTANT: name aligned with classification vitscope_nocls.py
+        self.hk_gate = HKGate(patch_size=patch_size)
+
+        # IMPORTANT: name aligned with classification vitscope_nocls.py
+        self.transformer = TransformerSCoPE(
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            dim_head=dim_head,
+            mlp_dim=mlp_dim,
+            num_patches=num_patches,
+            dropout=dropout,
+            drop_path_rate=drop_path_rate,
+        )
+
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(dim)
+            for _ in self.out_indices
+        ])
+        self.fpn_adapters = self._build_simple_fpn_adapters(
+            dim,
+            adapter_style=fpn_adapter_style,
+        )
+
+    def forward(self, img):
+        B, C, H, W = img.shape
+
+        actual_h = H // self.patch_size
+        actual_w = W // self.patch_size
+
+        hk_gate_1d = self.hk_gate(img)
+
+        x = self.to_patch(img)
+
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, x], dim=1)
+
+        x = self.drop(x)
+
+        outs = []
+
+        for i, (attn, ff, drop_path1, drop_path2) in enumerate(self.transformer.layers):
+            x = x + drop_path1(attn(x, hk_gate_1d))
+            x = x + drop_path2(ff(x))
+
+            if i in self.out_indices:
+                norm_idx = self.out_indices.index(i)
+                outs.append(
+                    self._format_out(
+                        x,
+                        actual_h,
+                        actual_w,
+                        norm_idx,
+                        has_cls=True,
+                    )
+                )
+
+        return tuple(outs)
+
+    def init_weights(self, pretrained=None):
+        pass
+
+
+# ---------------- Register ----------------
 if MMDET_AVAILABLE:
-    MMDET_BACKBONES.register_module(name='ViTBackbone', module=ViTBackbone)
-    MMDET_BACKBONES.register_module(name='ViTCoPEBackbone', module=ViTCoPEBackbone)
-    MMDET_BACKBONES.register_module(name='ViTSCoPEBackbone', module=ViTSCoPEBackbone)
+    MMDET_BACKBONES.register_module(name="ViTBackbone", module=ViTBackbone, force=True)
+    MMDET_BACKBONES.register_module(name="ViTCoPEBackbone", module=ViTCoPEBackbone, force=True)
+    MMDET_BACKBONES.register_module(name="ViTSCoPEBackbone", module=ViTSCoPEBackbone, force=True)
 
 if MMSEG_AVAILABLE:
-    MMSEG_BACKBONES.register_module(name='ViTBackbone', module=ViTBackbone)
-    MMSEG_BACKBONES.register_module(name='ViTCoPEBackbone', module=ViTCoPEBackbone)
-    MMSEG_BACKBONES.register_module(name='ViTSCoPEBackbone', module=ViTSCoPEBackbone)
+    MMSEG_BACKBONES.register_module(name="ViTBackbone", module=ViTBackbone, force=True)
+    MMSEG_BACKBONES.register_module(name="ViTCoPEBackbone", module=ViTCoPEBackbone, force=True)
+    MMSEG_BACKBONES.register_module(name="ViTSCoPEBackbone", module=ViTSCoPEBackbone, force=True)

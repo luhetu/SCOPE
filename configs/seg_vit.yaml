@@ -9,6 +9,9 @@ pretrained: ./checkpoint/vit_pretrained.pth  # Uniformly use custom ViT pre-trai
 
 # ViT configuration (Tiny)
 size: 224  # Train at 224 as requested
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 16
 dim: 192
 depth: 12
@@ -21,6 +24,7 @@ n_epochs: 32         # 32 × 2526 ≈ 80K iterations (bs=8)
 lr: 3e-5             # lr scaled by bs=8: 6e-5 × (8 / 16)
 min_lr: 0            # Polynomial decay to 0
 warmup_epochs: 0.9   # ➜ 1515 iterations
+warmup_iters: 1500
 weight_decay: 0.01   # Paper standard
 opt: adamw
 amp: false

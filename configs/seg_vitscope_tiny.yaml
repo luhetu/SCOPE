@@ -4,17 +4,26 @@ data_dir: ./datasets/ADE20K/ADEChallengeData2016
 bs: 16
 pretrained: ./checkpoint/pretrained/SCOPE/scopetiny.pth
 size: 224
+test_img_scale: [2048, 512]
+img_scale: [2048, 512]
+crop_size: 512
 patch: 16
 dim: 192
 depth: 12
 heads: 3
 mlp_dim: 768
 dim_head: 64
+
+# ADE20K UPerNet protocol from the paper: report 40K / 160K schedules.
+# Keep n_epochs only as an approximate reference; train.py uses max_iters.
+max_iters: 40000
 n_epochs: 32
 lr: 6e-5
 min_lr: 0
-warmup_epochs: 0.9
+warmup_iters: 1500
 weight_decay: 0.01
 opt: adamw
 amp: true
 nowandb: false
+use_cls_token: false
+drop_path_rate: 0.1

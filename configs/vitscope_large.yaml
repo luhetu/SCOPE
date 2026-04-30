@@ -1,7 +1,7 @@
 task: cls
 model: vitscope_nocls
 dataset: imagenet
-data_dir: /home3/dnrx52/vitcope
+data_dir: /tmp/vitcope
 bs: 256
 size: 224
 n_epochs: 300
@@ -26,4 +26,5 @@ random_erasing: true
 repeated_augmentations: true
 label_smoothing: true
 stochastic_depth: true
+drop_path_rate: 0.1
 nowandb: false

@@ -21,11 +21,19 @@ def load_cfg(parser):
             # 确保数值类型参数被正确Convert
             if key in ['lr', 'min_lr']:
                 value = float(value)
-            elif key in ['bs', 'size', 'n_epochs', 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'dim_head']:
+            elif key in [
+                'bs', 'size', 'n_epochs', 'max_iters', 'warmup_iters',
+                'checkpoint_interval', 'eval_interval', 'log_interval',
+                'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'dim_head',
+                'seg_head_dim', 'seg_aux_dim'
+            ]:
                 value = int(value)
-            elif key in ['warmup_epochs']:
+            elif key in [
+                'warmup_epochs', 'drop_path_rate', 'weight_decay',
+                'dropout', 'emb_dropout'
+            ]:
                 value = float(value)
-            elif key in ['amp', 'aug', 'nowandb']:
+            elif key in ['amp', 'aug', 'nowandb', 'use_cls_token']:
                 value = bool(value)
             elif key in ['pretrained'] and value == 'null':
                 value = None

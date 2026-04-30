@@ -18,7 +18,17 @@ dim_head: 64
 lr: 1e-4
 min_lr: 0
 warmup_epochs: 0
-opt: adam
+opt: adamw
 amp: true
 aug: true
+mixup: true
+cutmix: true
+random_erasing: true
+repeated_augmentations: true
+label_smoothing: true
+stochastic_depth: true
+drop_path_rate: 0.1
 nowandb: false
+weight_decay: 0.05
+betas: [0.9, 0.999]
+lrschedule: one_cycle_cosine
