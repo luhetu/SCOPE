@@ -481,9 +481,13 @@ class DetectionTask:
             ),
         ]
 
+        workers_per_gpu = getattr(args, "workers_per_gpu", None)
+        if workers_per_gpu is None:
+            workers_per_gpu = 4
+
         data = dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(workers_per_gpu),
             train=dict(
                 type="CocoDataset",
                 ann_file=f"{args.data_dir}/annotations/instances_train2017.json",
