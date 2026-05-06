@@ -211,7 +211,8 @@ def main():
     print(f"{'='*60}")
     print(f"  Task type: {args.task}")
     print(f"  Model: {args.model}")
-    print(f"  Image size: {args.size}")
+    if hasattr(args, "size"):
+        print(f"  Image size: {args.size}")
     print(f"  Patch size: {args.patch}")
     
     # Print different architecture parameters based on model type
