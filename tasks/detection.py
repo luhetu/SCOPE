@@ -41,6 +41,10 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
+def _int_or_default(value, default):
+    return int(default if value is None else value)
+
+
 class DetectionTask:
     def __init__(self, args):
         self.args = args
@@ -370,19 +374,6 @@ class DetectionTask:
     def _get_backbone_config(self):
         args = self.args
 
-        common = dict(
-            image_size=args.size,
-            patch_size=args.patch,
-            dim=args.dim,
-            depth=args.depth,
-            heads=args.heads,
-            mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
-            fpn_adapter_style="simple_fpn",
-        )
-
         if args.model == "swin":
             return dict(
                 type="SwinTransformer",
@@ -401,6 +392,19 @@ class DetectionTask:
                 out_indices=(0, 1, 2, 3),
                 use_checkpoint=False,
             )
+
+        common = dict(
+            image_size=args.size,
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=getattr(args, "dim_head", 64),
+            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
+            fpn_adapter_style="simple_fpn",
+        )
 
         if args.model == "vit":
             return dict(
@@ -483,7 +487,10 @@ class DetectionTask:
 
         data = dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=_int_or_default(
+                getattr(args, "workers_per_gpu", None),
+                4,
+            ),
             train=dict(
                 type="CocoDataset",
                 ann_file=f"{args.data_dir}/annotations/instances_train2017.json",
