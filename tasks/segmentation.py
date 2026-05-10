@@ -56,6 +56,15 @@ def _as_betas(value, default=(0.9, 0.999)):
     return default
 
 
+def _arg_or_default(args, name, default):
+    value = getattr(args, name, None)
+    return default if value is None else value
+
+
+def _int_arg(args, name, default):
+    return int(_arg_or_default(args, name, default))
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -168,7 +177,7 @@ class SegmentationTask:
 
         cfg.checkpoint_config = dict(
             by_epoch=False,
-            interval=int(getattr(args, "checkpoint_interval", 5000)),
+            interval=_int_arg(args, "checkpoint_interval", 5000),
             filename_tmpl=f"{model_name}_{task_name}_iter_{{}}.pth",
             max_keep_ckpts=3,
         )
@@ -178,8 +187,8 @@ class SegmentationTask:
         # Avoid EvalHook and TextLoggerHook triggering at same iter.
         # Old mmseg/mmcv can throw KeyError: 'data_time'.
         # --------------------------------------------------- #
-        log_interval = int(getattr(args, "log_interval", 100))
-        eval_interval = int(getattr(args, "eval_interval", 2001))
+        log_interval = _int_arg(args, "log_interval", 100)
+        eval_interval = _int_arg(args, "eval_interval", 2001)
 
         if eval_interval % log_interval == 0:
             eval_interval += 1
@@ -233,7 +242,7 @@ class SegmentationTask:
         backbone_cfg = self._get_backbone_config()
         in_channels = self._get_backbone_out_channels()
         default_head_channels = min(int(in_channels[0]), 512)
-        head_channels = int(getattr(self.args, "seg_head_dim", default_head_channels))
+        head_channels = int(_arg_or_default(self.args, "seg_head_dim", default_head_channels))
 
         decode_head_cfg = dict(
             type="UPerHead",
@@ -256,7 +265,7 @@ class SegmentationTask:
             type="FCNHead",
             in_channels=in_channels[3],
             in_index=3,
-            channels=int(getattr(self.args, "seg_aux_dim", 256)),
+            channels=_int_arg(self.args, "seg_aux_dim", 256),
             num_convs=1,
             concat_input=False,
             dropout_ratio=0.1,
@@ -286,19 +295,6 @@ class SegmentationTask:
     def _get_backbone_config(self):
         args = self.args
 
-        common = dict(
-            image_size=args.size,
-            patch_size=args.patch,
-            dim=args.dim,
-            depth=args.depth,
-            heads=args.heads,
-            mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
-            fpn_adapter_style="resize",
-        )
-
         if args.model == "swin":
             return dict(
                 type="SwinTransformer",
@@ -317,6 +313,19 @@ class SegmentationTask:
                 out_indices=(0, 1, 2, 3),
                 use_checkpoint=False,
             )
+
+        common = dict(
+            image_size=args.size,
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=_int_arg(args, "dim_head", 64),
+            drop_path_rate=float(_arg_or_default(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(_arg_or_default(args, "out_indices", (2, 5, 8, 11))),
+            fpn_adapter_style="resize",
+        )
 
         if args.model == "vit":
             return dict(
@@ -354,7 +363,7 @@ class SegmentationTask:
         args = self.args
 
         def _pair_from_arg(name, default):
-            value = getattr(args, name, default)
+            value = _arg_or_default(args, name, default)
             if isinstance(value, (tuple, list)):
                 if len(value) != 2:
                     raise ValueError(f"{name} must have two values, got {value}")
@@ -409,7 +418,7 @@ class SegmentationTask:
 
         data = dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=_int_arg(args, "workers_per_gpu", 4),
             train=dict(
                 type="ADE20KDataset",
                 data_root=args.data_dir,

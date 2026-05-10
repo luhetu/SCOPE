@@ -9,6 +9,7 @@ img_scale: [1333, 800]  # COCO 1x training standard size (short side 800)
 pretrained: ./checkpoint/swin_custom_pretrain.pth  # Use custom pre-trained weights
 
 # Swin Transformer configuration (aligned with mask_rcnn_swin-t-p4-w7_fpn_1x_coco)
+size: 224
 patch: 4
 embed_dim: 96
 depths: [2, 2, 6, 2]
