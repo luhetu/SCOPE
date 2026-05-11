@@ -80,8 +80,9 @@ class DetectionTask:
 
         if self.use_wandb:
             project_name = "coco-experiments"
+            image_size = getattr(args, "size", getattr(args, "pretrain_img_size", 224))
             watermark = (
-                f"{self.run_name}_size{args.size}_patch{args.patch}_"
+                f"{self.run_name}_size{image_size}_patch{args.patch}_"
                 f"dim{getattr(args, 'dim', getattr(args, 'embed_dim', 'na'))}_"
                 f"bs{args.bs}_lr{args.lr}"
             )
@@ -370,22 +371,11 @@ class DetectionTask:
     def _get_backbone_config(self):
         args = self.args
 
-        common = dict(
-            image_size=args.size,
-            patch_size=args.patch,
-            dim=args.dim,
-            depth=args.depth,
-            heads=args.heads,
-            mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
-            fpn_adapter_style="simple_fpn",
-        )
-
         if args.model == "swin":
             return dict(
                 type="SwinTransformer",
+                pretrain_img_size=getattr(args, "size", 224),
+                patch_size=args.patch,
                 embed_dim=args.embed_dim,
                 depths=args.depths,
                 num_heads=args.num_heads,
@@ -401,6 +391,19 @@ class DetectionTask:
                 out_indices=(0, 1, 2, 3),
                 use_checkpoint=False,
             )
+
+        common = dict(
+            image_size=args.size,
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=getattr(args, "dim_head", 64),
+            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
+            fpn_adapter_style="simple_fpn",
+        )
 
         if args.model == "vit":
             return dict(
