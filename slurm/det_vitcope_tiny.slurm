@@ -6,7 +6,7 @@
 #SBATCH -p gpu-bigmem
 #SBATCH --qos=long-high-prio
 #SBATCH --time=144:00:00
-#SBATCH -J det_vitcope_tiny
+#SBATCH -J detcope_tiny
 #SBATCH -o logs/%x%j.out
 #SBATCH --error=logs/%x%j.err
 #SBATCH --mail-type=ALL

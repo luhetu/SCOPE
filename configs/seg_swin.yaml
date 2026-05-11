@@ -7,7 +7,7 @@ data_dir: ./datasets/ADE20K/ADEChallengeData2016
 bs: 2  # Segmentation tasks require large memory, batch size should be small
 
 # Swin Transformer configuration
-size: 224
+size: 512
 test_img_scale: [2048, 512]
 img_scale: [2048, 512]
 crop_size: 512

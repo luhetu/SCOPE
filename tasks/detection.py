@@ -7,6 +7,7 @@ MMDetection + ViT / ViT-CoPE / ViT-SCoPE backbone.
 import os
 import time
 import torch
+import torch.nn.functional as F
 
 from mmcv import Config
 from mmdet.apis import set_random_seed, train_detector
@@ -120,7 +121,10 @@ class DetectionTask:
             paramwise_cfg=dict(
                 custom_keys={
                     "pos_embedding": dict(decay_mult=0.0),
+                    "pos_emb": dict(decay_mult=0.0),
                     "cls_token": dict(decay_mult=0.0),
+                    "hk_gate": dict(decay_mult=0.0),
+                    "lam": dict(decay_mult=0.0),
                     "absolute_pos_embed": dict(decay_mult=0.0),
                     "relative_position_bias_table": dict(decay_mult=0.0),
                     "norm": dict(decay_mult=0.0),
@@ -206,13 +210,28 @@ class DetectionTask:
     # ------------------------------------------------------- #
     def _get_mask_rcnn_config(self):
         backbone_cfg = self._get_backbone_config()
+        neck_type = str(getattr(self.args, "det_neck_type", "simple_fpn")).lower()
+        if neck_type == "fpn":
+            neck_cfg = dict(
+                type="FPN",
+                in_channels=self._get_backbone_out_channels(),
+                out_channels=256,
+                num_outs=5,
+            )
+        else:
+            neck_cfg = dict(
+                type="SimpleFeaturePyramid",
+                in_channels=self._get_backbone_out_channels(),
+                out_channels=256,
+                scale_factors=[4, 2, 1, 0.5],
+                num_outs=5,
+                # Old MMCV's LN in ConvModule expects channel-last tensors and
+                # crashes on NCHW feature maps. GN keeps the neck normalized.
+                norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
+                act_cfg=None,
+            )
 
-        neck_cfg = dict(
-            type="FPN",
-            in_channels=self._get_backbone_out_channels(),
-            out_channels=256,
-            num_outs=5,
-        )
+        roi_featmap_strides = self._get_roi_featmap_strides(neck_type)
 
         model = dict(
             type="MaskRCNN",
@@ -253,7 +272,7 @@ class DetectionTask:
                         sampling_ratio=0,
                     ),
                     out_channels=256,
-                    featmap_strides=[4, 8, 16, 32],
+                    featmap_strides=roi_featmap_strides,
                 ),
                 bbox_head=dict(
                     type="Shared2FCBBoxHead",
@@ -285,7 +304,7 @@ class DetectionTask:
                         sampling_ratio=0,
                     ),
                     out_channels=256,
-                    featmap_strides=[4, 8, 16, 32],
+                    featmap_strides=roi_featmap_strides,
                 ),
                 mask_head=dict(
                     type="FCNMaskHead",
@@ -367,6 +386,13 @@ class DetectionTask:
         return model
 
     # ------------------------------------------------------- #
+    def _get_roi_featmap_strides(self, neck_type):
+        """Official XCiT FPN backbones expose P2-P5 strides."""
+        if self.args.model == "swin":
+            return [4, 8, 16, 32]
+        return [4, 8, 16, 32]
+
+    # ------------------------------------------------------- #
     def _get_backbone_config(self):
         args = self.args
 
@@ -379,8 +405,12 @@ class DetectionTask:
             mlp_dim=args.mlp_dim,
             dim_head=getattr(args, "dim_head", 64),
             drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
-            fpn_adapter_style="simple_fpn",
+            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
+            fpn_adapter_style=(
+                "simple_fpn"
+                if str(getattr(args, "det_neck_type", "simple_fpn")).lower() == "fpn"
+                else "identity"
+            ),
         )
 
         if args.model == "swin":
@@ -454,8 +484,51 @@ class DetectionTask:
         train_pipeline = [
             dict(type="LoadImageFromFile"),
             dict(type="LoadAnnotations", with_bbox=True, with_mask=True),
-            dict(type="Resize", img_scale=img_scale, keep_ratio=True),
             dict(type="RandomFlip", flip_ratio=0.5),
+            dict(
+                type="AutoAugment",
+                policies=[
+                    [
+                        dict(
+                            type="Resize",
+                            img_scale=[
+                                (480, 1333), (512, 1333), (544, 1333),
+                                (576, 1333), (608, 1333), (640, 1333),
+                                (672, 1333), (704, 1333), (736, 1333),
+                                (768, 1333), (800, 1333),
+                            ],
+                            multiscale_mode="value",
+                            keep_ratio=True,
+                        )
+                    ],
+                    [
+                        dict(
+                            type="Resize",
+                            img_scale=[(400, 1333), (500, 1333), (600, 1333)],
+                            multiscale_mode="value",
+                            keep_ratio=True,
+                        ),
+                        dict(
+                            type="RandomCrop",
+                            crop_type="absolute_range",
+                            crop_size=(384, 600),
+                            allow_negative_crop=True,
+                        ),
+                        dict(
+                            type="Resize",
+                            img_scale=[
+                                (480, 1333), (512, 1333), (544, 1333),
+                                (576, 1333), (608, 1333), (640, 1333),
+                                (672, 1333), (704, 1333), (736, 1333),
+                                (768, 1333), (800, 1333),
+                            ],
+                            multiscale_mode="value",
+                            override=True,
+                            keep_ratio=True,
+                        ),
+                    ],
+                ],
+            ),
             dict(type="Normalize", **img_norm_cfg),
             dict(type="Pad", size_divisor=32),
             dict(type="DefaultFormatBundle"),
@@ -569,10 +642,38 @@ class DetectionTask:
 
         matched = {}
         unmatched = []
+        interpolated = []
 
         for k, v in backbone_dict.items():
             if k in model_dict and model_dict[k].shape == v.shape:
                 matched[k] = v
+            elif (
+                k in model_dict
+                and k.endswith("pos_embedding")
+                and v.ndim == 3
+                and model_dict[k].ndim == 3
+                and v.shape[-1] == model_dict[k].shape[-1]
+            ):
+                matched[k] = self._resize_token_position_embedding(v, model_dict[k])
+                interpolated.append(
+                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
+                )
+            elif (
+                k in model_dict
+                and k.endswith("cope.pos_emb")
+                and v.ndim == 3
+                and model_dict[k].ndim == 3
+                and v.shape[:2] == model_dict[k].shape[:2]
+            ):
+                matched[k] = F.interpolate(
+                    v.float(),
+                    size=model_dict[k].shape[-1],
+                    mode="linear",
+                    align_corners=False,
+                ).to(dtype=model_dict[k].dtype)
+                interpolated.append(
+                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
+                )
             else:
                 if k in model_dict:
                     unmatched.append(
@@ -584,6 +685,7 @@ class DetectionTask:
         print("\n📊 Matching results")
         print(f"   After mapping: {len(backbone_dict)} keys")
         print(f"   Matched: {len(matched)} keys")
+        print(f"   Interpolated position tables: {len(interpolated)}")
         print(f"   Unmatched: {len(unmatched)} keys")
         print(f"   Skipped classifier keys: {len(skipped)}")
 
@@ -595,6 +697,11 @@ class DetectionTask:
         if len(unmatched) > 0:
             print("\n⚠️ Sample unmatched keys:")
             for k in unmatched[:10]:
+                print(f"     {k}")
+
+        if len(interpolated) > 0:
+            print("\n🔁 Sample interpolated position tables:")
+            for k in interpolated[:5]:
                 print(f"     {k}")
 
         model_dict.update(matched)
@@ -615,6 +722,53 @@ class DetectionTask:
             )
 
         print(f"{'=' * 60}\n")
+
+    # ------------------------------------------------------- #
+    def _resize_token_position_embedding(self, source, target):
+        """Resize ViT absolute token position embeddings from cls pretraining."""
+        source_tokens = source.shape[1]
+        target_tokens = target.shape[1]
+        source_patch_with_cls = source_tokens - 1
+        target_patch_with_cls = target_tokens - 1
+        has_cls = (
+            int(source_patch_with_cls ** 0.5) ** 2 == source_patch_with_cls
+            and int(target_patch_with_cls ** 0.5) ** 2 == target_patch_with_cls
+        )
+
+        if has_cls:
+            source_cls = source[:, :1]
+            source_patch = source[:, 1:]
+            target_patch_tokens = target_tokens - 1
+        else:
+            source_cls = None
+            source_patch = source
+            target_patch_tokens = target_tokens
+
+        old_size = int(source_patch.shape[1] ** 0.5)
+        new_size = int(target_patch_tokens ** 0.5)
+
+        if old_size * old_size != source_patch.shape[1] or new_size * new_size != target_patch_tokens:
+            return source
+
+        source_patch = source_patch.reshape(
+            1, old_size, old_size, source.shape[-1]
+        ).permute(0, 3, 1, 2)
+        source_patch = F.interpolate(
+            source_patch.float(),
+            size=(new_size, new_size),
+            mode="bicubic",
+            align_corners=False,
+        )
+        source_patch = source_patch.permute(0, 2, 3, 1).reshape(
+            1, target_patch_tokens, source.shape[-1]
+        )
+
+        if source_cls is not None:
+            resized = torch.cat([source_cls.float(), source_patch], dim=1)
+        else:
+            resized = source_patch
+
+        return resized.to(dtype=target.dtype)
 
     # ------------------------------------------------------- #
     def train(self):

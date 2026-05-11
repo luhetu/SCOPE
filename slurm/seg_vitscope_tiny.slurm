@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -c 4
-#SBATCH --job-name=seg_vitscope_tiny
+#SBATCH --job-name=segscope_tiny
 #SBATCH --output=logs/seg_vitscope_tiny_%j.out
 #SBATCH --error=logs/seg_vitscope_tiny_%j.err
 #SBATCH --time=144:00:00

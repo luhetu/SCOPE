@@ -460,6 +460,9 @@ class SimpleFPNAdapter(nn.Module):
 
 class BackboneFeatureMixin:
     def _build_simple_fpn_adapters(self, dim, adapter_style="simple_fpn"):
+        if adapter_style in ("identity", "none", None):
+            return nn.ModuleList([nn.Identity() for _ in self.out_indices])
+
         if len(self.out_indices) != 4:
             return nn.ModuleList([nn.Identity() for _ in self.out_indices])
 

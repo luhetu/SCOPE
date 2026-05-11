@@ -2,8 +2,9 @@ task: det
 model: vitscope
 data_dir: /home3/dnrx52/SCOPE/datasets/coco
 
-bs: 8
-pretrained: ./checkpoint/pretrained/SCOPE/scopetiny.pth  # 65.34%
+bs: 2
+pretrained: ./checkpoint/pretrained/SCOPE/scopetiny.pth  # 70.95%
+det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 img_scale: [1333, 800]
 size: 224
 patch: 16
@@ -14,7 +15,7 @@ mlp_dim: 768
 dim_head: 64
 
 n_epochs: 12  # 1x schedule
-lr: 5e-5  # 1e-4 * (bs/16) with bs=8
+lr: 1.25e-5  # 1e-4 * (bs/16) with bs=2
 min_lr: 0.000001
 warmup_iters: 1000
 weight_decay: 0.05

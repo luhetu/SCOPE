@@ -11,7 +11,7 @@ bs: 4
 pretrained: ./checkpoint/vitcope_cls_size224_patch16_dim192_depth12_0421_235647_best.pth  # 68.13%
 
 # Backbone/pretrain configuration (Tiny ImageNet checkpoint size)
-size: 224
+size: 512
 test_img_scale: [2048, 512]
 img_scale: [2048, 512]
 crop_size: 512

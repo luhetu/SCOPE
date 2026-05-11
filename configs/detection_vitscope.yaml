@@ -6,6 +6,7 @@ model: vitscope
 data_dir: /home3/dnrx52/SCOPE/datasets/coco
 bs: 8
 pretrained: ./checkpoint/pretrained/vitscope_pretrained.pth
+det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 img_scale: [768, 768]  # Fully consistent with ViT
 
 # ViT+SCoPE configuration (Tiny)

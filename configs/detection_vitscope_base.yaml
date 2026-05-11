@@ -3,6 +3,7 @@ model: vitscope
 data_dir: /home3/dnrx52/SCOPE/datasets/coco
 bs: 1
 pretrained: ./checkpoint/pretrained/SCOPE/scopebasedp2.pth  # 78.07%
+det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 img_scale: [1333, 800]
 size: 224
 patch: 16

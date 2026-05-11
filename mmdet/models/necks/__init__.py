@@ -9,9 +9,11 @@ from .nasfcos_fpn import NASFCOS_FPN
 from .pafpn import PAFPN
 from .rfp import RFP
 from .bifpn import BiFPN
+from .simple_feature_pyramid import SimpleFeaturePyramid
 from .yolo_neck import YOLOV3Neck
 
 __all__ = [
     'FPN', 'BFP', 'ChannelMapper', 'HRFPN', 'NASFPN', 'FPN_CARAFE', 'PAFPN',
-    'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'BiFPN'
+    'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'BiFPN',
+    'SimpleFeaturePyramid'
 ]

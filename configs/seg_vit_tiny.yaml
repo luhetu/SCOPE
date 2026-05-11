@@ -7,6 +7,7 @@ size: 224
 test_img_scale: [2048, 512]
 img_scale: [2048, 512]
 crop_size: 512
+seg_neck_style: xcit_fpn
 patch: 16
 dim: 192
 depth: 12
@@ -21,6 +22,7 @@ lr: 6e-5
 min_lr: 0
 warmup_iters: 1500
 weight_decay: 0.01
+layer_decay_rate: 1.0
 opt: adamw
 amp: true
 nowandb: false

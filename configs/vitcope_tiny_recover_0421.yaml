@@ -13,9 +13,12 @@ mlp_dim: 768
 dim_head: 64
 use_cls_token: false
 pool: mean
-dropout: 0.1
-emb_dropout: 0.1
-lr: 7.5e-4  # 1e-3 * (bs/1024) with bs=768
+
+# Explicitly lock these values to avoid code-path drift.
+dropout: 0.0
+emb_dropout: 0.0
+
+lr: 7.5e-4
 min_lr: 0
 warmup_epochs: 5
 weight_decay: 0.05
@@ -30,5 +33,5 @@ random_erasing: true
 repeated_augmentations: true
 label_smoothing: true
 stochastic_depth: true
-drop_path_rate: 0
+drop_path_rate: 0.1
 nowandb: false

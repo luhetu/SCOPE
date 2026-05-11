@@ -1,16 +1,21 @@
 #!/bin/bash
 #SBATCH -N 1
-#SBATCH -c 8
+#SBATCH -w gpu13
 #SBATCH --mem=56G
-#SBATCH --gres=gpu:ampere:1
+#SBATCH --gres=gpu:hopper:1
 #SBATCH -p gpu-bigmem
-#SBATCH --qos=long-high-prio
-#SBATCH --time=144:00:00
-#SBATCH -J detscope_tiny
+#SBATCH --qos=hopper-test-qos
+#SBATCH --time=4-23:59:59
+#SBATCH -J det_scope_tiny
 #SBATCH -o logs/%x%j.out
 #SBATCH --error=logs/%x%j.err
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=dnrx52@durham.ac.uk
+
+
+
+
+
 
 module load cuda/11.1
 

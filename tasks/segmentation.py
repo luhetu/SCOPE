@@ -13,10 +13,12 @@ This version:
 import os
 import time
 import torch
+import torch.nn.functional as F
 
 from mmcv import Config
-from mmseg.apis import set_random_seed, train_segmentor
-from mmseg.datasets import build_dataset
+from mmcv.parallel import MMDataParallel
+from mmseg.apis import set_random_seed, single_gpu_test, train_segmentor
+from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.models import build_segmentor
 from mmseg.models.builder import BACKBONES as MMSEG_BACKBONES
 
@@ -125,13 +127,7 @@ class SegmentationTask:
             lr=args.lr,
             betas=_as_betas(getattr(args, "betas", None)),
             weight_decay=getattr(args, "weight_decay", 0.01),
-            paramwise_cfg=dict(
-                custom_keys={
-                    "pos_embedding": dict(decay_mult=0.0),
-                    "cls_token": dict(decay_mult=0.0),
-                    "norm": dict(decay_mult=0.0),
-                }
-            ),
+            paramwise_cfg=self._get_paramwise_cfg(),
         )
 
         cfg.optimizer_config = dict(grad_clip=None)
@@ -200,6 +196,7 @@ class SegmentationTask:
         )
 
         cfg.custom_hooks = []
+        cfg.final_eval = bool(getattr(args, "final_eval", True))
 
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
@@ -218,22 +215,103 @@ class SegmentationTask:
         print(f"   eval_interval: {eval_interval}")
         print(f"   lr: {args.lr}")
         print(f"   weight_decay: {getattr(args, 'weight_decay', 0.01)}")
+        print(f"   layer_decay_rate: {getattr(args, 'layer_decay_rate', 1.0)}")
         print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
         print(f"   img_scale: {getattr(args, 'img_scale', [2048, 512])}")
         print(f"   test_img_scale: {getattr(args, 'test_img_scale', [2048, 512])}")
-        default_head_channels = min(self._get_backbone_out_channels()[0], 512)
+        default_head_channels = self._get_default_seg_head_dim()
         print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', default_head_channels)}")
         print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', 256)}")
+        print(f"   seg_aux_in_index: {getattr(args, 'seg_aux_in_index', 2)}")
+        print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'BN')}")
+        print(f"   seg_neck_dim: {getattr(args, 'seg_neck_dim', self._get_backbone_out_channels()[0])}")
+        print(f"   final_eval: {cfg.final_eval}")
         print(f"   work_dir: {cfg.work_dir}")
 
         return cfg
 
     # ------------------------------------------------------- #
+    def _get_paramwise_cfg(self):
+        args = self.args
+        layer_decay_rate = float(getattr(args, "layer_decay_rate", 1.0))
+
+        custom_keys = {
+            "backbone.pos_embedding": dict(decay_mult=0.0),
+            "cope.pos_emb": dict(decay_mult=0.0),
+            "backbone.cls_token": dict(decay_mult=0.0),
+            "backbone.hk_gate": dict(decay_mult=0.0),
+            ".fn.lam": dict(decay_mult=0.0),
+        }
+
+        if args.model != "swin" and layer_decay_rate < 1.0:
+            depth = int(getattr(args, "depth", 12))
+            embed_lr_mult = layer_decay_rate ** depth
+
+            custom_keys.update({
+                "backbone.to_patch_embedding": dict(lr_mult=embed_lr_mult),
+                "backbone.to_patch": dict(lr_mult=embed_lr_mult),
+                "backbone.pos_embedding": dict(
+                    lr_mult=embed_lr_mult,
+                    decay_mult=0.0,
+                ),
+                "backbone.cls_token": dict(
+                    lr_mult=embed_lr_mult,
+                    decay_mult=0.0,
+                ),
+                "backbone.hk_gate": dict(
+                    lr_mult=embed_lr_mult,
+                    decay_mult=0.0,
+                ),
+            })
+
+            for layer_idx in range(depth):
+                lr_mult = layer_decay_rate ** (depth - layer_idx - 1)
+                layer_prefix = f"backbone.transformer.layers.{layer_idx}"
+                custom_keys[f"{layer_prefix}.0.fn"] = dict(lr_mult=lr_mult)
+                custom_keys[f"{layer_prefix}.1.fn"] = dict(lr_mult=lr_mult)
+                custom_keys[f"{layer_prefix}.0.fn.cope.pos_emb"] = dict(
+                    lr_mult=lr_mult,
+                    decay_mult=0.0,
+                )
+                custom_keys[f"{layer_prefix}.0.fn.lam"] = dict(
+                    lr_mult=lr_mult,
+                    decay_mult=0.0,
+                )
+                custom_keys[f"{layer_prefix}.0.norm"] = dict(
+                    lr_mult=lr_mult,
+                    decay_mult=0.0,
+                )
+                custom_keys[f"{layer_prefix}.1.norm"] = dict(
+                    lr_mult=lr_mult,
+                    decay_mult=0.0,
+                )
+
+            custom_keys["backbone.norms"] = dict(lr_mult=1.0, decay_mult=0.0)
+
+        return dict(
+            custom_keys=custom_keys,
+            norm_decay_mult=0.0,
+        )
+
+    # ------------------------------------------------------- #
     def _get_upernet_config(self):
         backbone_cfg = self._get_backbone_config()
         in_channels = self._get_backbone_out_channels()
-        default_head_channels = min(int(in_channels[0]), 512)
+        default_head_channels = self._get_default_seg_head_dim()
         head_channels = int(getattr(self.args, "seg_head_dim", default_head_channels))
+        norm_cfg = self._get_seg_norm_cfg()
+        neck_cfg = None
+        seg_neck_style = str(getattr(self.args, "seg_neck_style", "none")).lower()
+
+        if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
+            neck_out_channels = int(getattr(self.args, "seg_neck_dim", in_channels[0]))
+            neck_cfg = dict(
+                type="MultiLevelNeck",
+                in_channels=in_channels,
+                out_channels=neck_out_channels,
+                scales=[4, 2, 1, 0.5],
+            )
+            in_channels = [neck_out_channels] * 4
 
         decode_head_cfg = dict(
             type="UPerHead",
@@ -243,7 +321,7 @@ class SegmentationTask:
             channels=head_channels,
             dropout_ratio=0.1,
             num_classes=150,
-            norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
+            norm_cfg=norm_cfg,
             align_corners=False,
             loss_decode=dict(
                 type="CrossEntropyLoss",
@@ -252,16 +330,24 @@ class SegmentationTask:
             ),
         )
 
+        aux_in_index = int(getattr(self.args, "seg_aux_in_index", 2))
+        if aux_in_index < 0:
+            aux_in_index += len(in_channels)
+        if aux_in_index < 0 or aux_in_index >= len(in_channels):
+            raise ValueError(
+                f"seg_aux_in_index={aux_in_index} is out of range for {len(in_channels)} feature maps"
+            )
+
         auxiliary_head_cfg = dict(
             type="FCNHead",
-            in_channels=in_channels[3],
-            in_index=3,
+            in_channels=in_channels[aux_in_index],
+            in_index=aux_in_index,
             channels=int(getattr(self.args, "seg_aux_dim", 256)),
             num_convs=1,
             concat_input=False,
             dropout_ratio=0.1,
             num_classes=150,
-            norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
+            norm_cfg=norm_cfg,
             align_corners=False,
             loss_decode=dict(
                 type="CrossEntropyLoss",
@@ -274,6 +360,7 @@ class SegmentationTask:
             type="EncoderDecoder",
             pretrained=None,
             backbone=backbone_cfg,
+            neck=neck_cfg,
             decode_head=decode_head_cfg,
             auxiliary_head=auxiliary_head_cfg,
             train_cfg=dict(),
@@ -281,6 +368,20 @@ class SegmentationTask:
         )
 
         return model
+
+    # ------------------------------------------------------- #
+    def _get_default_seg_head_dim(self):
+        """Use the standard UPerNet decoder width unless explicitly overridden."""
+        return 512
+
+    # ------------------------------------------------------- #
+    def _get_seg_norm_cfg(self):
+        # SyncBN matches distributed official configs, but this project launches
+        # segmentation jobs as single-process MMDataParallel by default.
+        norm_type = str(getattr(self.args, "seg_norm_type", "BN"))
+        if norm_type.upper() == "GN":
+            return dict(type="GN", num_groups=32, requires_grad=True)
+        return dict(type=norm_type, requires_grad=True)
 
     # ------------------------------------------------------- #
     def _get_backbone_config(self):
@@ -295,8 +396,8 @@ class SegmentationTask:
             mlp_dim=args.mlp_dim,
             dim_head=getattr(args, "dim_head", 64),
             drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (2, 5, 8, 11))),
-            fpn_adapter_style="resize",
+            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
+            fpn_adapter_style=self._get_vit_fpn_adapter_style(),
         )
 
         if args.model == "swin":
@@ -338,6 +439,15 @@ class SegmentationTask:
             )
 
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
+
+    # ------------------------------------------------------- #
+    def _get_vit_fpn_adapter_style(self):
+        seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        if seg_neck_style in ("internal_resize", "resize"):
+            return "resize"
+        if seg_neck_style in ("xcit_fpn", "simple_fpn", "official", "official_xcit"):
+            return "simple_fpn"
+        return "identity"
 
     # ------------------------------------------------------- #
     def _get_backbone_out_channels(self):
@@ -399,6 +509,7 @@ class SegmentationTask:
                 flip=False,
                 transforms=[
                     dict(type="Resize", keep_ratio=True),
+                    dict(type="RandomFlip"),
                     dict(type="Pad", size_divisor=int(getattr(args, "patch", 16))),
                     dict(type="Normalize", **img_norm_cfg),
                     dict(type="ImageToTensor", keys=["img"]),
@@ -472,6 +583,7 @@ class SegmentationTask:
 
         backbone_dict = {}
         skipped = []
+        remapped_final_norm = []
 
         for k, v in pretrained_dict.items():
             if k.startswith("module."):
@@ -490,17 +602,56 @@ class SegmentationTask:
                 skipped.append(k)
                 continue
 
-            new_key = k if k.startswith("backbone.") else f"backbone.{k}"
+            raw_key = k[len("backbone."):] if k.startswith("backbone.") else k
+            if raw_key in ("norm.weight", "norm.bias"):
+                last_norm_idx = len(getattr(self.args, "out_indices", (3, 5, 7, 11))) - 1
+                suffix = raw_key.split(".", 1)[1]
+                new_key = f"backbone.norms.{last_norm_idx}.{suffix}"
+                remapped_final_norm.append(f"{raw_key} -> {new_key}")
+            else:
+                new_key = k if k.startswith("backbone.") else f"backbone.{k}"
             backbone_dict[new_key] = v
 
         model_dict = self.model.state_dict()
 
         matched = {}
         unmatched = []
+        interpolated = []
 
         for k, v in backbone_dict.items():
             if k in model_dict and model_dict[k].shape == v.shape:
                 matched[k] = v
+            elif (
+                k in model_dict
+                and k.endswith("pos_embedding")
+                and v.ndim == 3
+                and model_dict[k].ndim == 3
+                and v.shape[-1] == model_dict[k].shape[-1]
+            ):
+                matched[k] = self._resize_token_position_embedding(v, model_dict[k])
+                interpolated.append(
+                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
+                )
+            elif (
+                k in model_dict
+                and k.endswith("cope.pos_emb")
+                and v.ndim == 3
+                and model_dict[k].ndim == 3
+                and v.shape[:2] == model_dict[k].shape[:2]
+            ):
+                # CoPE position tables are 1D over token count. Classification
+                # pretraining is usually 224px, while official segmentation
+                # configs initialize the backbone at 512px. Preserve the learned
+                # table by interpolating it to the segmentation token length.
+                matched[k] = F.interpolate(
+                    v.float(),
+                    size=model_dict[k].shape[-1],
+                    mode="linear",
+                    align_corners=False,
+                ).to(dtype=model_dict[k].dtype)
+                interpolated.append(
+                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
+                )
             else:
                 if k in model_dict:
                     unmatched.append(
@@ -512,8 +663,10 @@ class SegmentationTask:
         print("\n📊 Matching results")
         print(f"   After mapping: {len(backbone_dict)} keys")
         print(f"   Matched: {len(matched)} keys")
+        print(f"   Interpolated CoPE tables: {len(interpolated)}")
         print(f"   Unmatched: {len(unmatched)} keys")
         print(f"   Skipped classifier keys: {len(skipped)}")
+        print(f"   Remapped final norm keys: {len(remapped_final_norm)}")
 
         if len(matched) > 0:
             print("\n✅ Sample matched keys:")
@@ -523,6 +676,16 @@ class SegmentationTask:
         if len(unmatched) > 0:
             print("\n⚠️ Sample unmatched keys:")
             for k in unmatched[:10]:
+                print(f"     {k}")
+
+        if len(remapped_final_norm) > 0:
+            print("\n🔁 Remapped classification final norm:")
+            for k in remapped_final_norm[:4]:
+                print(f"     {k}")
+
+        if len(interpolated) > 0:
+            print("\n🔁 Sample interpolated CoPE position tables:")
+            for k in interpolated[:5]:
                 print(f"     {k}")
 
         model_dict.update(matched)
@@ -545,6 +708,53 @@ class SegmentationTask:
         print(f"{'=' * 60}\n")
 
     # ------------------------------------------------------- #
+    def _resize_token_position_embedding(self, source, target):
+        """Resize ViT absolute token position embeddings from cls pretraining."""
+        source_tokens = source.shape[1]
+        target_tokens = target.shape[1]
+        source_patch_with_cls = source_tokens - 1
+        target_patch_with_cls = target_tokens - 1
+        has_cls = (
+            int(source_patch_with_cls ** 0.5) ** 2 == source_patch_with_cls
+            and int(target_patch_with_cls ** 0.5) ** 2 == target_patch_with_cls
+        )
+
+        if has_cls:
+            source_cls = source[:, :1]
+            source_patch = source[:, 1:]
+            target_patch_tokens = target_tokens - 1
+        else:
+            source_cls = None
+            source_patch = source
+            target_patch_tokens = target_tokens
+
+        old_size = int(source_patch.shape[1] ** 0.5)
+        new_size = int(target_patch_tokens ** 0.5)
+
+        if old_size * old_size != source_patch.shape[1] or new_size * new_size != target_patch_tokens:
+            return source
+
+        source_patch = source_patch.reshape(
+            1, old_size, old_size, source.shape[-1]
+        ).permute(0, 3, 1, 2)
+        source_patch = F.interpolate(
+            source_patch.float(),
+            size=(new_size, new_size),
+            mode="bicubic",
+            align_corners=False,
+        )
+        source_patch = source_patch.permute(0, 2, 3, 1).reshape(
+            1, target_patch_tokens, source.shape[-1]
+        )
+
+        if source_cls is not None:
+            resized = torch.cat([source_cls.float(), source_patch], dim=1)
+        else:
+            resized = source_patch
+
+        return resized.to(dtype=target.dtype)
+
+    # ------------------------------------------------------- #
     def train(self):
         print(f"🚀 Start training {self.args.model} + UPerNet on ADE20K\n")
 
@@ -558,7 +768,58 @@ class SegmentationTask:
             meta=dict(),
         )
 
+        if self.cfg.get("final_eval", True):
+            self._run_final_eval()
+
         print("\n✅ Segmentation training finished!\n")
 
         if self.use_wandb:
             wandb.finish()
+
+    # ------------------------------------------------------- #
+    def _run_final_eval(self):
+        print("\n🚀 Running final ADE20K evaluation after max_iters")
+        print("   This evaluates the in-memory final model weights.")
+
+        val_dataset = build_dataset(self.cfg.data.val, dict(test_mode=True))
+        val_loader = build_dataloader(
+            val_dataset,
+            samples_per_gpu=1,
+            workers_per_gpu=self.cfg.data.workers_per_gpu,
+            dist=False,
+            shuffle=False,
+        )
+
+        eval_model = MMDataParallel(
+            self.model.cuda(self.cfg.gpu_ids[0]),
+            device_ids=self.cfg.gpu_ids,
+        )
+        eval_model.CLASSES = val_dataset.CLASSES
+        if hasattr(val_dataset, "PALETTE"):
+            eval_model.PALETTE = val_dataset.PALETTE
+
+        results = single_gpu_test(eval_model, val_loader, show=False)
+        eval_results = val_dataset.evaluate(
+            results,
+            metric=self.cfg.evaluation.get("metric", "mIoU"),
+            logger=None,
+        )
+
+        print("\n" + "=" * 60)
+        print("FINAL SEGMENTATION EVALUATION RESULTS")
+        print("=" * 60)
+        for key, value in eval_results.items():
+            if isinstance(value, float):
+                print(f"{key:20s}: {value * 100:.2f}")
+            else:
+                print(f"{key:20s}: {value}")
+        print("=" * 60 + "\n")
+
+        if self.use_wandb:
+            wandb.log({
+                f"final_eval/{key}": value
+                for key, value in eval_results.items()
+                if isinstance(value, (int, float))
+            })
+
+        return eval_results

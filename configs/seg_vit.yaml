@@ -8,7 +8,7 @@ bs: 8
 pretrained: ./checkpoint/vit_pretrained.pth  # Uniformly use custom ViT pre-training
 
 # ViT configuration (Tiny)
-size: 224  # Train at 224 as requested
+size: 224
 test_img_scale: [2048, 512]
 img_scale: [2048, 512]
 crop_size: 512

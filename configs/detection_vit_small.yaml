@@ -3,6 +3,7 @@ model: vit
 data_dir: /home3/dnrx52/SCOPE/datasets/coco
 bs: 4
 pretrained: ./checkpoint/pretrained/vit_cls_size224_patch16_dim384_depth12_best.pth  # 72.81%
+det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 img_scale: [1333, 800]
 size: 224
 patch: 16

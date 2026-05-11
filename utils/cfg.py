@@ -25,12 +25,12 @@ def load_cfg(parser):
                 'bs', 'size', 'n_epochs', 'max_iters', 'warmup_iters',
                 'checkpoint_interval', 'eval_interval', 'log_interval',
                 'patch', 'dim', 'depth', 'heads', 'mlp_dim', 'dim_head',
-                'seg_head_dim', 'seg_aux_dim'
+                'seg_head_dim', 'seg_aux_dim', 'seg_neck_dim'
             ]:
                 value = int(value)
             elif key in [
                 'warmup_epochs', 'drop_path_rate', 'weight_decay',
-                'dropout', 'emb_dropout'
+                'dropout', 'emb_dropout', 'layer_decay_rate'
             ]:
                 value = float(value)
             elif key in ['amp', 'aug', 'nowandb', 'use_cls_token']:
