@@ -3,11 +3,13 @@
 Semantic Segmentation Task
 MMSegmentation + ViT / ViT-CoPE / ViT-SCoPE backbone.
 
-This version:
-1. Explicitly registers ViTBackbone / ViTCoPEBackbone / ViTSCoPEBackbone.
-2. Aligns downstream backbone config with classification backbone naming.
-3. Loads classification checkpoint into backbone with simple key prefix mapping.
-4. Avoids EvalHook and TextLoggerHook collision that causes KeyError: 'data_time'.
+Fixes in this version:
+1. Registers ViT / ViT-CoPE / ViT-SCoPE backbones explicitly.
+2. Uses crop_size/backbone_size for dense-prediction backbone initialization.
+3. Loads ImageNet classification checkpoints into the segmentation backbone.
+4. Remaps final norm from both norm.* and mlp_head.0.* to backbone.norms[-1].
+5. Keeps CoPE / ViT position tables by interpolation instead of dropping them.
+6. Pads ADE20K validation images to 32 for stable multi-level ViT features.
 """
 
 import os
@@ -33,7 +35,6 @@ def _register_backbone_once(name, module):
     if name in MMSEG_BACKBONES.module_dict:
         print(f"✅ [MMSEG Registry] {name} already registered")
         return
-
     MMSEG_BACKBONES.register_module(name=name, module=module)
     print(f"✅ [MMSEG Registry] registered {name}")
 
@@ -58,6 +59,16 @@ def _as_betas(value, default=(0.9, 0.999)):
     return default
 
 
+def _as_pair(value, default):
+    if value is None:
+        value = default
+    if isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            raise ValueError(f"pair value must have two elements, got {value}")
+        return (int(value[0]), int(value[1]))
+    return (int(value), int(value))
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -69,7 +80,6 @@ class SegmentationTask:
         print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
 
         self.use_wandb = WANDB_AVAILABLE and not getattr(args, "nowandb", False)
-
         self.cfg = self._build_mmseg_config()
 
         if hasattr(args, "seed") and args.seed is not None:
@@ -110,7 +120,6 @@ class SegmentationTask:
         if not cfg_name:
             dim = getattr(args, "dim", getattr(args, "embed_dim", "na"))
             cfg_name = f"{args.model}_seg_dim{dim}"
-
         run_tag = getattr(args, "run_tag", None)
         return f"{cfg_name}_{run_tag}" if run_tag else cfg_name
 
@@ -129,7 +138,6 @@ class SegmentationTask:
             weight_decay=getattr(args, "weight_decay", 0.01),
             paramwise_cfg=self._get_paramwise_cfg(),
         )
-
         cfg.optimizer_config = dict(grad_clip=None)
 
         if bool(getattr(args, "amp", False)):
@@ -144,11 +152,7 @@ class SegmentationTask:
         if warmup_iters is None:
             warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
 
-        cfg.runner = dict(
-            type="IterBasedRunner",
-            max_iters=max_iters,
-        )
-
+        cfg.runner = dict(type="IterBasedRunner", max_iters=max_iters)
         cfg.lr_config = dict(
             policy="poly",
             warmup="linear" if warmup_iters > 0 else None,
@@ -161,7 +165,6 @@ class SegmentationTask:
 
         model_name = self.run_name
         task_name = args.task or "seg"
-
         cfg.checkpoint_config = dict(
             by_epoch=False,
             interval=int(getattr(args, "checkpoint_interval", 5000)),
@@ -169,14 +172,9 @@ class SegmentationTask:
             max_keep_ckpts=3,
         )
 
-        # --------------------------------------------------- #
-        # IMPORTANT FIX:
-        # Avoid EvalHook and TextLoggerHook triggering at same iter.
-        # Old mmseg/mmcv can throw KeyError: 'data_time'.
-        # --------------------------------------------------- #
+        # Avoid old mmcv EvalHook/TextLoggerHook same-iter data_time KeyError.
         log_interval = int(getattr(args, "log_interval", 100))
         eval_interval = int(getattr(args, "eval_interval", 2001))
-
         if eval_interval % log_interval == 0:
             eval_interval += 1
 
@@ -187,17 +185,13 @@ class SegmentationTask:
             save_best="mIoU",
             classwise=False,
         )
-
         cfg.log_config = dict(
             interval=log_interval,
-            hooks=[
-                dict(type="TextLoggerHook", by_epoch=False),
-            ],
+            hooks=[dict(type="TextLoggerHook", by_epoch=False)],
         )
 
         cfg.custom_hooks = []
         cfg.final_eval = bool(getattr(args, "final_eval", True))
-
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
         cfg.work_dir = f"./work_dirs/{self.run_name}_upernet"
@@ -219,8 +213,8 @@ class SegmentationTask:
         print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
         print(f"   img_scale: {getattr(args, 'img_scale', [2048, 512])}")
         print(f"   test_img_scale: {getattr(args, 'test_img_scale', [2048, 512])}")
-        default_head_channels = self._get_default_seg_head_dim()
-        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', default_head_channels)}")
+        print(f"   backbone_image_size: {self._get_backbone_image_size()}")
+        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
         print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', 256)}")
         print(f"   seg_aux_in_index: {getattr(args, 'seg_aux_in_index', 2)}")
         print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'BN')}")
@@ -246,52 +240,25 @@ class SegmentationTask:
         if args.model != "swin" and layer_decay_rate < 1.0:
             depth = int(getattr(args, "depth", 12))
             embed_lr_mult = layer_decay_rate ** depth
-
             custom_keys.update({
                 "backbone.to_patch_embedding": dict(lr_mult=embed_lr_mult),
                 "backbone.to_patch": dict(lr_mult=embed_lr_mult),
-                "backbone.pos_embedding": dict(
-                    lr_mult=embed_lr_mult,
-                    decay_mult=0.0,
-                ),
-                "backbone.cls_token": dict(
-                    lr_mult=embed_lr_mult,
-                    decay_mult=0.0,
-                ),
-                "backbone.hk_gate": dict(
-                    lr_mult=embed_lr_mult,
-                    decay_mult=0.0,
-                ),
+                "backbone.pos_embedding": dict(lr_mult=embed_lr_mult, decay_mult=0.0),
+                "backbone.cls_token": dict(lr_mult=embed_lr_mult, decay_mult=0.0),
+                "backbone.hk_gate": dict(lr_mult=embed_lr_mult, decay_mult=0.0),
             })
-
             for layer_idx in range(depth):
                 lr_mult = layer_decay_rate ** (depth - layer_idx - 1)
                 layer_prefix = f"backbone.transformer.layers.{layer_idx}"
                 custom_keys[f"{layer_prefix}.0.fn"] = dict(lr_mult=lr_mult)
                 custom_keys[f"{layer_prefix}.1.fn"] = dict(lr_mult=lr_mult)
-                custom_keys[f"{layer_prefix}.0.fn.cope.pos_emb"] = dict(
-                    lr_mult=lr_mult,
-                    decay_mult=0.0,
-                )
-                custom_keys[f"{layer_prefix}.0.fn.lam"] = dict(
-                    lr_mult=lr_mult,
-                    decay_mult=0.0,
-                )
-                custom_keys[f"{layer_prefix}.0.norm"] = dict(
-                    lr_mult=lr_mult,
-                    decay_mult=0.0,
-                )
-                custom_keys[f"{layer_prefix}.1.norm"] = dict(
-                    lr_mult=lr_mult,
-                    decay_mult=0.0,
-                )
-
+                custom_keys[f"{layer_prefix}.0.fn.cope.pos_emb"] = dict(lr_mult=lr_mult, decay_mult=0.0)
+                custom_keys[f"{layer_prefix}.0.fn.lam"] = dict(lr_mult=lr_mult, decay_mult=0.0)
+                custom_keys[f"{layer_prefix}.0.norm"] = dict(lr_mult=lr_mult, decay_mult=0.0)
+                custom_keys[f"{layer_prefix}.1.norm"] = dict(lr_mult=lr_mult, decay_mult=0.0)
             custom_keys["backbone.norms"] = dict(lr_mult=1.0, decay_mult=0.0)
 
-        return dict(
-            custom_keys=custom_keys,
-            norm_decay_mult=0.0,
-        )
+        return dict(custom_keys=custom_keys, norm_decay_mult=0.0)
 
     # ------------------------------------------------------- #
     def _get_upernet_config(self):
@@ -323,11 +290,7 @@ class SegmentationTask:
             num_classes=150,
             norm_cfg=norm_cfg,
             align_corners=False,
-            loss_decode=dict(
-                type="CrossEntropyLoss",
-                use_sigmoid=False,
-                loss_weight=1.0,
-            ),
+            loss_decode=dict(type="CrossEntropyLoss", use_sigmoid=False, loss_weight=1.0),
         )
 
         aux_in_index = int(getattr(self.args, "seg_aux_in_index", 2))
@@ -349,14 +312,10 @@ class SegmentationTask:
             num_classes=150,
             norm_cfg=norm_cfg,
             align_corners=False,
-            loss_decode=dict(
-                type="CrossEntropyLoss",
-                use_sigmoid=False,
-                loss_weight=0.4,
-            ),
+            loss_decode=dict(type="CrossEntropyLoss", use_sigmoid=False, loss_weight=0.4),
         )
 
-        model = dict(
+        return dict(
             type="EncoderDecoder",
             pretrained=None,
             backbone=backbone_cfg,
@@ -367,38 +326,31 @@ class SegmentationTask:
             test_cfg=dict(mode="whole"),
         )
 
-        return model
-
     # ------------------------------------------------------- #
     def _get_default_seg_head_dim(self):
-        """Use the standard UPerNet decoder width unless explicitly overridden."""
         return 512
 
     # ------------------------------------------------------- #
     def _get_seg_norm_cfg(self):
-        # SyncBN matches distributed official configs, but this project launches
-        # segmentation jobs as single-process MMDataParallel by default.
         norm_type = str(getattr(self.args, "seg_norm_type", "BN"))
         if norm_type.upper() == "GN":
             return dict(type="GN", num_groups=32, requires_grad=True)
         return dict(type=norm_type, requires_grad=True)
 
     # ------------------------------------------------------- #
+    def _get_backbone_image_size(self):
+        args = self.args
+        # args.size stays as ImageNet pretraining size. Dense prediction backbone
+        # tables should be initialized at crop_size, usually 512, then checkpoints
+        # are interpolated once at load time.
+        value = getattr(args, "backbone_size", getattr(args, "crop_size", args.size))
+        if isinstance(value, (tuple, list)):
+            return tuple(int(v) for v in value)
+        return int(value)
+
+    # ------------------------------------------------------- #
     def _get_backbone_config(self):
         args = self.args
-
-        common = dict(
-            image_size=args.size,
-            patch_size=args.patch,
-            dim=args.dim,
-            depth=args.depth,
-            heads=args.heads,
-            mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
-            fpn_adapter_style=self._get_vit_fpn_adapter_style(),
-        )
 
         if args.model == "swin":
             return dict(
@@ -419,11 +371,21 @@ class SegmentationTask:
                 use_checkpoint=False,
             )
 
+        common = dict(
+            image_size=self._get_backbone_image_size(),
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=getattr(args, "dim_head", 64),
+            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
+            fpn_adapter_style=self._get_vit_fpn_adapter_style(),
+        )
+
         if args.model == "vit":
-            return dict(
-                type="ViTBackbone",
-                **common,
-            )
+            return dict(type="ViTBackbone", **common)
 
         if args.model == "vitcope":
             return dict(
@@ -433,10 +395,7 @@ class SegmentationTask:
             )
 
         if args.model == "vitscope":
-            return dict(
-                type="ViTSCoPEBackbone",
-                **common,
-            )
+            return dict(type="ViTSCoPEBackbone", **common)
 
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 
@@ -452,24 +411,14 @@ class SegmentationTask:
     # ------------------------------------------------------- #
     def _get_backbone_out_channels(self):
         args = self.args
-
         if args.model == "swin":
             base_dim = args.embed_dim
             return [base_dim * (2 ** i) for i in range(4)]
-
         return [args.dim] * 4
 
     # ------------------------------------------------------- #
     def _get_data_config(self):
         args = self.args
-
-        def _pair_from_arg(name, default):
-            value = getattr(args, name, default)
-            if isinstance(value, (tuple, list)):
-                if len(value) != 2:
-                    raise ValueError(f"{name} must have two values, got {value}")
-                return (int(value[0]), int(value[1]))
-            return (int(value), int(value))
 
         img_norm_cfg = dict(
             mean=[123.675, 116.28, 103.53],
@@ -477,21 +426,14 @@ class SegmentationTask:
             to_rgb=True,
         )
 
-        # Scratching follows XCiT/Swin ADE20K UPerNet protocol:
-        # 512x512 crop with long-side img_scale (2048, 512), while args.size
-        # still describes the ImageNet pretraining/backbone setup.
-        crop_size = _pair_from_arg("crop_size", 512)
-        img_scale = _pair_from_arg("img_scale", (2048, 512))
-        test_img_scale = _pair_from_arg("test_img_scale", img_scale)
+        crop_size = _as_pair(getattr(args, "crop_size", None), 512)
+        img_scale = _as_pair(getattr(args, "img_scale", None), (2048, 512))
+        test_img_scale = _as_pair(getattr(args, "test_img_scale", None), img_scale)
 
         train_pipeline = [
             dict(type="LoadImageFromFile"),
             dict(type="LoadAnnotations", reduce_zero_label=True),
-            dict(
-                type="Resize",
-                img_scale=img_scale,
-                ratio_range=(0.5, 2.0),
-            ),
+            dict(type="Resize", img_scale=img_scale, ratio_range=(0.5, 2.0)),
             dict(type="RandomCrop", crop_size=crop_size, cat_max_ratio=0.75),
             dict(type="RandomFlip", prob=0.5),
             dict(type="PhotoMetricDistortion"),
@@ -501,6 +443,8 @@ class SegmentationTask:
             dict(type="Collect", keys=["img", "gt_semantic_seg"]),
         ]
 
+        # simple_fpn has a stride-32 output. Pad validation images to 32 so the
+        # patch grid is even before the final 0.5-scale feature.
         test_pipeline = [
             dict(type="LoadImageFromFile"),
             dict(
@@ -510,7 +454,7 @@ class SegmentationTask:
                 transforms=[
                     dict(type="Resize", keep_ratio=True),
                     dict(type="RandomFlip"),
-                    dict(type="Pad", size_divisor=int(getattr(args, "patch", 16))),
+                    dict(type="Pad", size_divisor=32),
                     dict(type="Normalize", **img_norm_cfg),
                     dict(type="ImageToTensor", keys=["img"]),
                     dict(type="Collect", keys=["img"]),
@@ -518,7 +462,7 @@ class SegmentationTask:
             ),
         ]
 
-        data = dict(
+        return dict(
             samples_per_gpu=args.bs,
             workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
             train=dict(
@@ -544,20 +488,41 @@ class SegmentationTask:
             ),
         )
 
-        return data
-
     # ------------------------------------------------------- #
     def _extract_state_dict(self, checkpoint):
         if "model" in checkpoint:
             print("   Using checkpoint['model']")
             return checkpoint["model"]
-
         if "state_dict" in checkpoint:
             print("   Using checkpoint['state_dict']")
             return checkpoint["state_dict"]
-
         print("   Using checkpoint directly")
         return checkpoint
+
+    # ------------------------------------------------------- #
+    def _map_pretrained_key(self, key):
+        raw_key = key[len("backbone."):] if key.startswith("backbone.") else key
+        last_norm_idx = len(getattr(self.args, "out_indices", (3, 5, 7, 11))) - 1
+
+        # ViT / CoPE final norm lives in mlp_head.0.*.
+        if raw_key in ("mlp_head.0.weight", "mlp_head.0.bias"):
+            suffix = raw_key.rsplit(".", 1)[1]
+            return f"backbone.norms.{last_norm_idx}.{suffix}", "final_norm"
+
+        # SCoPE final norm lives in norm.*.
+        if raw_key in ("norm.weight", "norm.bias"):
+            suffix = raw_key.split(".", 1)[1]
+            return f"backbone.norms.{last_norm_idx}.{suffix}", "final_norm"
+
+        if (
+            raw_key.startswith("mlp_head.")
+            or raw_key.startswith("head.")
+            or raw_key.startswith("fc.")
+            or "classifier" in raw_key
+        ):
+            return None, "skip_head"
+
+        return (key if key.startswith("backbone.") else f"backbone.{key}"), "backbone"
 
     # ------------------------------------------------------- #
     def _load_pretrained_backbone(self, pretrained_path):
@@ -577,7 +542,6 @@ class SegmentationTask:
         print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
 
         pretrained_dict = self._extract_state_dict(checkpoint)
-
         print(f"   Total pretrained keys: {len(pretrained_dict)}")
         print(f"   Sample keys: {list(pretrained_dict.keys())[:5]}")
 
@@ -593,27 +557,15 @@ class SegmentationTask:
             if k.startswith("model."):
                 k = k[len("model."):]
 
-            if (
-                k.startswith("mlp_head.")
-                or k.startswith("head.")
-                or k.startswith("fc.")
-                or "classifier" in k
-            ):
+            new_key, kind = self._map_pretrained_key(k)
+            if kind == "skip_head":
                 skipped.append(k)
                 continue
-
-            raw_key = k[len("backbone."):] if k.startswith("backbone.") else k
-            if raw_key in ("norm.weight", "norm.bias"):
-                last_norm_idx = len(getattr(self.args, "out_indices", (3, 5, 7, 11))) - 1
-                suffix = raw_key.split(".", 1)[1]
-                new_key = f"backbone.norms.{last_norm_idx}.{suffix}"
-                remapped_final_norm.append(f"{raw_key} -> {new_key}")
-            else:
-                new_key = k if k.startswith("backbone.") else f"backbone.{k}"
+            if kind == "final_norm":
+                remapped_final_norm.append(f"{k} -> {new_key}")
             backbone_dict[new_key] = v
 
         model_dict = self.model.state_dict()
-
         matched = {}
         unmatched = []
         interpolated = []
@@ -629,9 +581,7 @@ class SegmentationTask:
                 and v.shape[-1] == model_dict[k].shape[-1]
             ):
                 matched[k] = self._resize_token_position_embedding(v, model_dict[k])
-                interpolated.append(
-                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
-                )
+                interpolated.append(f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}")
             elif (
                 k in model_dict
                 and k.endswith("cope.pos_emb")
@@ -639,53 +589,42 @@ class SegmentationTask:
                 and model_dict[k].ndim == 3
                 and v.shape[:2] == model_dict[k].shape[:2]
             ):
-                # CoPE position tables are 1D over token count. Classification
-                # pretraining is usually 224px, while official segmentation
-                # configs initialize the backbone at 512px. Preserve the learned
-                # table by interpolating it to the segmentation token length.
                 matched[k] = F.interpolate(
                     v.float(),
                     size=model_dict[k].shape[-1],
                     mode="linear",
                     align_corners=False,
                 ).to(dtype=model_dict[k].dtype)
-                interpolated.append(
-                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
-                )
+                interpolated.append(f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}")
             else:
                 if k in model_dict:
-                    unmatched.append(
-                        f"{k} shape mismatch: ckpt={tuple(v.shape)} model={tuple(model_dict[k].shape)}"
-                    )
+                    unmatched.append(f"{k} shape mismatch: ckpt={tuple(v.shape)} model={tuple(model_dict[k].shape)}")
                 else:
                     unmatched.append(f"{k} not in model")
 
         print("\n📊 Matching results")
         print(f"   After mapping: {len(backbone_dict)} keys")
         print(f"   Matched: {len(matched)} keys")
-        print(f"   Interpolated CoPE tables: {len(interpolated)}")
+        print(f"   Interpolated position tables: {len(interpolated)}")
         print(f"   Unmatched: {len(unmatched)} keys")
         print(f"   Skipped classifier keys: {len(skipped)}")
         print(f"   Remapped final norm keys: {len(remapped_final_norm)}")
 
-        if len(matched) > 0:
+        if matched:
             print("\n✅ Sample matched keys:")
             for k in list(matched.keys())[:5]:
                 print(f"     {k}")
-
-        if len(unmatched) > 0:
+        if unmatched:
             print("\n⚠️ Sample unmatched keys:")
             for k in unmatched[:10]:
                 print(f"     {k}")
-
-        if len(remapped_final_norm) > 0:
+        if remapped_final_norm:
             print("\n🔁 Remapped classification final norm:")
-            for k in remapped_final_norm[:4]:
+            for k in remapped_final_norm[:6]:
                 print(f"     {k}")
-
-        if len(interpolated) > 0:
-            print("\n🔁 Sample interpolated CoPE position tables:")
-            for k in interpolated[:5]:
+        if interpolated:
+            print("\n🔁 Sample interpolated position tables:")
+            for k in interpolated[:6]:
                 print(f"     {k}")
 
         model_dict.update(matched)
@@ -701,15 +640,14 @@ class SegmentationTask:
             print(f"   Sample ckpt mapped key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
             print(f"   Sample model key: {model_backbone_keys[0] if model_backbone_keys else 'NONE'}")
             raise RuntimeError(
-                f"Pretrained backbone match rate {match_rate:.1f}% is below "
-                f"required {min_match_rate:.1f}% for {pretrained_path}"
+                f"Pretrained backbone match rate {match_rate:.1f}% is below required {min_match_rate:.1f}% "
+                f"for {pretrained_path}"
             )
 
         print(f"{'=' * 60}\n")
 
     # ------------------------------------------------------- #
     def _resize_token_position_embedding(self, source, target):
-        """Resize ViT absolute token position embeddings from cls pretraining."""
         source_tokens = source.shape[1]
         target_tokens = target.shape[1]
         source_patch_with_cls = source_tokens - 1
@@ -730,28 +668,22 @@ class SegmentationTask:
 
         old_size = int(source_patch.shape[1] ** 0.5)
         new_size = int(target_patch_tokens ** 0.5)
-
         if old_size * old_size != source_patch.shape[1] or new_size * new_size != target_patch_tokens:
             return source
 
-        source_patch = source_patch.reshape(
-            1, old_size, old_size, source.shape[-1]
-        ).permute(0, 3, 1, 2)
+        source_patch = source_patch.reshape(1, old_size, old_size, source.shape[-1]).permute(0, 3, 1, 2)
         source_patch = F.interpolate(
             source_patch.float(),
             size=(new_size, new_size),
             mode="bicubic",
             align_corners=False,
         )
-        source_patch = source_patch.permute(0, 2, 3, 1).reshape(
-            1, target_patch_tokens, source.shape[-1]
-        )
+        source_patch = source_patch.permute(0, 2, 3, 1).reshape(1, target_patch_tokens, source.shape[-1])
 
         if source_cls is not None:
             resized = torch.cat([source_cls.float(), source_patch], dim=1)
         else:
             resized = source_patch
-
         return resized.to(dtype=target.dtype)
 
     # ------------------------------------------------------- #
@@ -772,7 +704,6 @@ class SegmentationTask:
             self._run_final_eval()
 
         print("\n✅ Segmentation training finished!\n")
-
         if self.use_wandb:
             wandb.finish()
 
@@ -810,16 +741,10 @@ class SegmentationTask:
         print("=" * 60)
         for key, value in eval_results.items():
             if isinstance(value, float):
-                print(f"{key:20s}: {value * 100:.2f}")
+                print(f"{key}: {value:.4f}")
             else:
-                print(f"{key:20s}: {value}")
+                print(f"{key}: {value}")
         print("=" * 60 + "\n")
 
         if self.use_wandb:
-            wandb.log({
-                f"final_eval/{key}": value
-                for key, value in eval_results.items()
-                if isinstance(value, (int, float))
-            })
-
-        return eval_results
+            wandb.log({f"final_{k}": v for k, v in eval_results.items() if isinstance(v, (int, float))})

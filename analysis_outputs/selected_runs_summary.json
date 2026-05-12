@@ -1,0 +1,41 @@
+[
+  {
+    "run": "det_vitscope_tiny910850",
+    "task": "det",
+    "status": "ok",
+    "last_step": 12,
+    "last_metric_name": "bbox_mAP",
+    "last_metric": 0.302,
+    "best_step": 11,
+    "best_metric_name": "bbox_mAP",
+    "best_metric": 0.302
+  },
+  {
+    "run": "seg_vitscope_tiny_912582",
+    "task": "seg",
+    "status": "ok",
+    "last_step": 38019,
+    "last_metric_name": "mIoU",
+    "last_metric": 0.2753,
+    "best_step": 38019,
+    "best_metric_name": "mIoU",
+    "best_metric": 0.2753
+  },
+  {
+    "run": "det_vit_tiny912584",
+    "task": "det",
+    "status": "failed",
+    "error": "RuntimeError: Given normalized_shape=[256], expected input with shape [*, 256], but got input of size[8, 256, 200, 304]"
+  },
+  {
+    "run": "seg_vit_tiny_912581",
+    "task": "seg",
+    "status": "ok",
+    "last_step": 38019,
+    "last_metric_name": "mIoU",
+    "last_metric": 0.2802,
+    "best_step": 38019,
+    "best_metric_name": "mIoU",
+    "best_metric": 0.2802
+  }
+]

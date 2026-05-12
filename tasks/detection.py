@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Object Detection Task
-MMDetection + ViT / ViT-CoPE / ViT-SCoPE backbone.
-"""
+"""Object Detection Task: MMDetection + ViT / ViT-CoPE / ViT-SCoPE."""
 
 import os
 import time
@@ -15,20 +12,15 @@ from mmdet.datasets import build_dataset
 from mmdet.models import build_detector
 from mmdet.models.builder import BACKBONES as MMDET_BACKBONES
 
-from models.vit_backbone import (
-    ViTBackbone,
-    ViTCoPEBackbone,
-    ViTSCoPEBackbone,
-)
+from models.vit_backbone import ViTBackbone, ViTCoPEBackbone, ViTSCoPEBackbone
 
 
 def _register_backbone_once(name, module):
-    if name in MMDET_BACKBONES.module_dict:
+    if name not in MMDET_BACKBONES.module_dict:
+        MMDET_BACKBONES.register_module(name=name, module=module)
+        print(f"✅ [MMDET Registry] registered {name}")
+    else:
         print(f"✅ [MMDET Registry] {name} already registered")
-        return
-
-    MMDET_BACKBONES.register_module(name=name, module=module)
-    print(f"✅ [MMDET Registry] registered {name}")
 
 
 _register_backbone_once("ViTBackbone", ViTBackbone)
@@ -40,6 +32,23 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+
+def _as_betas(value, default=(0.9, 0.999)):
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return tuple(float(v) for v in value)
+    return default
+
+
+def _as_scale(value, default=(1333, 800)):
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ValueError(f"img_scale should have two values, got {value}")
+        return (int(value[0]), int(value[1]))
+    v = int(value)
+    return (v, v)
 
 
 class DetectionTask:
@@ -54,7 +63,7 @@ class DetectionTask:
 
         self.cfg = self._build_mmdet_config()
 
-        if hasattr(args, "seed") and args.seed is not None:
+        if getattr(args, "seed", None) is not None:
             set_random_seed(args.seed, deterministic=True)
 
         self.model = build_detector(
@@ -63,60 +72,46 @@ class DetectionTask:
             test_cfg=self.cfg.get("test_cfg"),
         )
 
-        if hasattr(args, "pretrained") and args.pretrained:
+        if getattr(args, "pretrained", None):
             print(f"\n🔧 Loading pretrained weights: {args.pretrained}")
             self._load_pretrained_backbone(args.pretrained)
         else:
             print("⚠️  Training from scratch: no pretrained weights provided.")
 
         self.datasets = [build_dataset(self.cfg.data.train)]
-
-        if len(self.cfg.workflow) == 2:
-            import copy
-            val_dataset = copy.deepcopy(self.cfg.data.val)
-            val_dataset.pipeline = self.cfg.data.train.pipeline
-            self.datasets.append(build_dataset(val_dataset))
+        self.model.CLASSES = self.datasets[0].CLASSES
 
         self.use_wandb = WANDB_AVAILABLE and not getattr(args, "nowandb", False)
-
         if self.use_wandb:
-            project_name = "coco-experiments"
             watermark = (
                 f"{self.run_name}_size{args.size}_patch{args.patch}_"
                 f"dim{getattr(args, 'dim', getattr(args, 'embed_dim', 'na'))}_"
                 f"bs{args.bs}_lr{args.lr}"
             )
-            wandb.init(project=project_name, name=watermark)
+            wandb.init(project="coco-experiments", name=watermark)
             wandb.config.update(vars(args))
         elif not WANDB_AVAILABLE and not getattr(args, "nowandb", False):
             print("WARNING: WandB not installed, skipping WandB logging.")
 
-        self.model.CLASSES = self.datasets[0].CLASSES
-
-    # ------------------------------------------------------- #
     def _build_run_name(self):
-        args = self.args
-        cfg_path = getattr(args, "cfg", "")
+        cfg_path = getattr(self.args, "cfg", "")
         cfg_name = os.path.splitext(os.path.basename(cfg_path))[0] if cfg_path else ""
         if not cfg_name:
-            dim = getattr(args, "dim", getattr(args, "embed_dim", "na"))
-            cfg_name = f"{args.model}_det_dim{dim}"
-
-        run_tag = getattr(args, "run_tag", None)
+            dim = getattr(self.args, "dim", getattr(self.args, "embed_dim", "na"))
+            cfg_name = f"{self.args.model}_det_dim{dim}"
+        run_tag = getattr(self.args, "run_tag", None)
         return f"{cfg_name}_{run_tag}" if run_tag else cfg_name
 
-    # ------------------------------------------------------- #
     def _build_mmdet_config(self):
         args = self.args
         cfg = Config()
-
         cfg.model = self._get_mask_rcnn_config()
         cfg.data = self._get_data_config()
 
         cfg.optimizer = dict(
             type="AdamW",
             lr=args.lr,
-            betas=(0.9, 0.999),
+            betas=_as_betas(getattr(args, "betas", None)),
             weight_decay=getattr(args, "weight_decay", 0.05),
             paramwise_cfg=dict(
                 custom_keys={
@@ -131,10 +126,7 @@ class DetectionTask:
                 }
             ),
         )
-
-        cfg.optimizer_config = dict(
-            grad_clip=dict(max_norm=35, norm_type=2)
-        )
+        cfg.optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 
         if bool(getattr(args, "amp", False)):
             cfg.fp16 = dict(loss_scale="dynamic")
@@ -149,45 +141,25 @@ class DetectionTask:
             warmup="linear" if warmup_iters > 0 else None,
             warmup_iters=warmup_iters,
             warmup_ratio=0.001,
-            step=[
-                args.n_epochs * 2 // 3,
-                args.n_epochs * 8 // 9,
-            ],
+            step=[args.n_epochs * 2 // 3, args.n_epochs * 8 // 9],
         )
-
-        cfg.runner = dict(
-            type="EpochBasedRunner",
-            max_epochs=args.n_epochs,
-        )
-
-        model_name = self.run_name
-        task_name = args.task or "det"
-
+        cfg.runner = dict(type="EpochBasedRunner", max_epochs=args.n_epochs)
         cfg.checkpoint_config = dict(
             interval=1,
-            filename_tmpl=f"{model_name}_{task_name}_epoch_{{}}.pth",
+            filename_tmpl=f"{self.run_name}_{args.task or 'det'}_epoch_{{}}.pth",
             max_keep_ckpts=3,
         )
-
         cfg.evaluation = dict(
             interval=1,
             metric=["bbox", "segm"],
             save_best="bbox_mAP",
             classwise=False,
         )
-
         cfg.log_config = dict(
             interval=int(getattr(args, "log_interval", 50)),
-            hooks=[
-                dict(type="TextLoggerHook"),
-            ],
+            hooks=[dict(type="TextLoggerHook")],
         )
-
-        # 只保留 mmdet 内置 hook，避免未注册自定义 hook 报错
-        cfg.custom_hooks = [
-            dict(type="NumClassCheckHook"),
-        ]
-
+        cfg.custom_hooks = [dict(type="NumClassCheckHook")]
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
         cfg.work_dir = f"./work_dirs/{self.run_name}_maskrcnn"
@@ -200,16 +172,14 @@ class DetectionTask:
         print("\n✅ MMDet config summary")
         print(f"   epochs: {args.n_epochs}")
         print(f"   lr: {args.lr}")
+        print(f"   betas: {_as_betas(getattr(args, 'betas', None))}")
         print(f"   weight_decay: {getattr(args, 'weight_decay', 0.05)}")
         print(f"   warmup_iters: {warmup_iters}")
-        print(f"   img_scale: {getattr(args, 'img_scale', [1333, 800])}")
+        print(f"   img_scale: {_as_scale(getattr(args, 'img_scale', None))}")
         print(f"   work_dir: {cfg.work_dir}")
-
         return cfg
 
-    # ------------------------------------------------------- #
     def _get_mask_rcnn_config(self):
-        backbone_cfg = self._get_backbone_config()
         neck_type = str(getattr(self.args, "det_neck_type", "simple_fpn")).lower()
         if neck_type == "fpn":
             neck_cfg = dict(
@@ -225,17 +195,13 @@ class DetectionTask:
                 out_channels=256,
                 scale_factors=[4, 2, 1, 0.5],
                 num_outs=5,
-                # Old MMCV's LN in ConvModule expects channel-last tensors and
-                # crashes on NCHW feature maps. GN keeps the neck normalized.
                 norm_cfg=dict(type="GN", num_groups=32, requires_grad=True),
                 act_cfg=None,
             )
 
-        roi_featmap_strides = self._get_roi_featmap_strides(neck_type)
-
-        model = dict(
+        return dict(
             type="MaskRCNN",
-            backbone=backbone_cfg,
+            backbone=self._get_backbone_config(),
             neck=neck_cfg,
             rpn_head=dict(
                 type="RPNHead",
@@ -252,27 +218,16 @@ class DetectionTask:
                     target_means=[0.0, 0.0, 0.0, 0.0],
                     target_stds=[1.0, 1.0, 1.0, 1.0],
                 ),
-                loss_cls=dict(
-                    type="CrossEntropyLoss",
-                    use_sigmoid=True,
-                    loss_weight=1.0,
-                ),
-                loss_bbox=dict(
-                    type="L1Loss",
-                    loss_weight=1.0,
-                ),
+                loss_cls=dict(type="CrossEntropyLoss", use_sigmoid=True, loss_weight=1.0),
+                loss_bbox=dict(type="L1Loss", loss_weight=1.0),
             ),
             roi_head=dict(
                 type="StandardRoIHead",
                 bbox_roi_extractor=dict(
                     type="SingleRoIExtractor",
-                    roi_layer=dict(
-                        type="RoIAlign",
-                        output_size=7,
-                        sampling_ratio=0,
-                    ),
+                    roi_layer=dict(type="RoIAlign", output_size=7, sampling_ratio=0),
                     out_channels=256,
-                    featmap_strides=roi_featmap_strides,
+                    featmap_strides=[4, 8, 16, 32],
                 ),
                 bbox_head=dict(
                     type="Shared2FCBBoxHead",
@@ -286,25 +241,14 @@ class DetectionTask:
                         target_stds=[0.1, 0.1, 0.2, 0.2],
                     ),
                     reg_class_agnostic=False,
-                    loss_cls=dict(
-                        type="CrossEntropyLoss",
-                        use_sigmoid=False,
-                        loss_weight=1.0,
-                    ),
-                    loss_bbox=dict(
-                        type="L1Loss",
-                        loss_weight=1.0,
-                    ),
+                    loss_cls=dict(type="CrossEntropyLoss", use_sigmoid=False, loss_weight=1.0),
+                    loss_bbox=dict(type="L1Loss", loss_weight=1.0),
                 ),
                 mask_roi_extractor=dict(
                     type="SingleRoIExtractor",
-                    roi_layer=dict(
-                        type="RoIAlign",
-                        output_size=14,
-                        sampling_ratio=0,
-                    ),
+                    roi_layer=dict(type="RoIAlign", output_size=14, sampling_ratio=0),
                     out_channels=256,
-                    featmap_strides=roi_featmap_strides,
+                    featmap_strides=[4, 8, 16, 32],
                 ),
                 mask_head=dict(
                     type="FCNMaskHead",
@@ -312,11 +256,7 @@ class DetectionTask:
                     in_channels=256,
                     conv_out_channels=256,
                     num_classes=80,
-                    loss_mask=dict(
-                        type="CrossEntropyLoss",
-                        use_mask=True,
-                        loss_weight=1.0,
-                    ),
+                    loss_mask=dict(type="CrossEntropyLoss", use_mask=True, loss_weight=1.0),
                 ),
             ),
             train_cfg=dict(
@@ -383,19 +323,8 @@ class DetectionTask:
             ),
         )
 
-        return model
-
-    # ------------------------------------------------------- #
-    def _get_roi_featmap_strides(self, neck_type):
-        """Official XCiT FPN backbones expose P2-P5 strides."""
-        if self.args.model == "swin":
-            return [4, 8, 16, 32]
-        return [4, 8, 16, 32]
-
-    # ------------------------------------------------------- #
     def _get_backbone_config(self):
         args = self.args
-
         common = dict(
             image_size=args.size,
             patch_size=args.patch,
@@ -412,7 +341,6 @@ class DetectionTask:
                 else "identity"
             ),
         )
-
         if args.model == "swin":
             return dict(
                 type="SwinTransformer",
@@ -431,55 +359,39 @@ class DetectionTask:
                 out_indices=(0, 1, 2, 3),
                 use_checkpoint=False,
             )
-
         if args.model == "vit":
-            return dict(
-                type="ViTBackbone",
-                **common,
-            )
-
+            return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
             return dict(
                 type="ViTCoPEBackbone",
                 use_cls_token=bool(getattr(args, "use_cls_token", False)),
                 **common,
             )
-
         if args.model == "vitscope":
-            return dict(
-                type="ViTSCoPEBackbone",
-                **common,
-            )
-
+            return dict(type="ViTSCoPEBackbone", **common)
         raise ValueError(f"Unknown detection backbone model: {args.model}")
 
-    # ------------------------------------------------------- #
     def _get_backbone_out_channels(self):
-        args = self.args
+        if self.args.model == "swin":
+            return [self.args.embed_dim * (2 ** i) for i in range(4)]
+        return [self.args.dim] * 4
 
-        if args.model == "swin":
-            base_dim = args.embed_dim
-            return [base_dim * (2 ** i) for i in range(4)]
-
-        return [args.dim] * 4
-
-    # ------------------------------------------------------- #
     def _get_data_config(self):
         args = self.args
-
-        if hasattr(args, "img_scale"):
-            if isinstance(args.img_scale, (tuple, list)):
-                img_scale = tuple(args.img_scale)
-            else:
-                img_scale = (args.img_scale, args.img_scale)
-        else:
-            img_scale = (1333, 800)
-
+        img_scale = _as_scale(getattr(args, "img_scale", None))
         img_norm_cfg = dict(
             mean=[123.675, 116.28, 103.53],
             std=[58.395, 57.12, 57.375],
             to_rgb=True,
         )
+
+        # MMDetection uses img_scale=(width, height).
+        train_scales = [
+            (1333, 480), (1333, 512), (1333, 544),
+            (1333, 576), (1333, 608), (1333, 640),
+            (1333, 672), (1333, 704), (1333, 736),
+            (1333, 768), (1333, 800),
+        ]
 
         train_pipeline = [
             dict(type="LoadImageFromFile"),
@@ -491,12 +403,7 @@ class DetectionTask:
                     [
                         dict(
                             type="Resize",
-                            img_scale=[
-                                (480, 1333), (512, 1333), (544, 1333),
-                                (576, 1333), (608, 1333), (640, 1333),
-                                (672, 1333), (704, 1333), (736, 1333),
-                                (768, 1333), (800, 1333),
-                            ],
+                            img_scale=train_scales,
                             multiscale_mode="value",
                             keep_ratio=True,
                         )
@@ -504,7 +411,7 @@ class DetectionTask:
                     [
                         dict(
                             type="Resize",
-                            img_scale=[(400, 1333), (500, 1333), (600, 1333)],
+                            img_scale=[(1333, 400), (1333, 500), (1333, 600)],
                             multiscale_mode="value",
                             keep_ratio=True,
                         ),
@@ -516,12 +423,7 @@ class DetectionTask:
                         ),
                         dict(
                             type="Resize",
-                            img_scale=[
-                                (480, 1333), (512, 1333), (544, 1333),
-                                (576, 1333), (608, 1333), (640, 1333),
-                                (672, 1333), (704, 1333), (736, 1333),
-                                (768, 1333), (800, 1333),
-                            ],
+                            img_scale=train_scales,
                             multiscale_mode="value",
                             override=True,
                             keep_ratio=True,
@@ -532,10 +434,7 @@ class DetectionTask:
             dict(type="Normalize", **img_norm_cfg),
             dict(type="Pad", size_divisor=32),
             dict(type="DefaultFormatBundle"),
-            dict(
-                type="Collect",
-                keys=["img", "gt_bboxes", "gt_labels", "gt_masks"],
-            ),
+            dict(type="Collect", keys=["img", "gt_bboxes", "gt_labels", "gt_masks"]),
         ]
 
         test_pipeline = [
@@ -554,7 +453,7 @@ class DetectionTask:
             ),
         ]
 
-        data = dict(
+        return dict(
             samples_per_gpu=args.bs,
             workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
             train=dict(
@@ -577,22 +476,16 @@ class DetectionTask:
             ),
         )
 
-        return data
-
-    # ------------------------------------------------------- #
     def _extract_state_dict(self, checkpoint):
         if "model" in checkpoint:
             print("   Using checkpoint['model']")
             return checkpoint["model"]
-
         if "state_dict" in checkpoint:
             print("   Using checkpoint['state_dict']")
             return checkpoint["state_dict"]
-
         print("   Using checkpoint directly")
         return checkpoint
 
-    # ------------------------------------------------------- #
     def _load_pretrained_backbone(self, pretrained_path):
         print(f"\n{'=' * 60}")
         print("🔧 PRETRAINED LOADING DEBUG")
@@ -608,41 +501,44 @@ class DetectionTask:
         checkpoint = torch.load(pretrained_path, map_location="cpu")
         print("✅ Checkpoint loaded")
         print(f"   Checkpoint keys: {list(checkpoint.keys())[:5]}")
-
         pretrained_dict = self._extract_state_dict(checkpoint)
-
         print(f"   Total pretrained keys: {len(pretrained_dict)}")
         print(f"   Sample keys: {list(pretrained_dict.keys())[:5]}")
 
-        backbone_dict = {}
-        skipped = []
+        backbone_dict, skipped, remapped_final_norm = {}, [], []
+        last_norm_idx = len(getattr(self.args, "out_indices", (3, 5, 7, 11))) - 1
 
         for k, v in pretrained_dict.items():
-            if k.startswith("module."):
-                k = k[len("module."):]
-            if k.startswith("net."):
-                k = k[len("net."):]
-            if k.startswith("model."):
-                k = k[len("model."):]
+            for prefix in ("module.", "net.", "model."):
+                if k.startswith(prefix):
+                    k = k[len(prefix):]
 
-            # skip classifier heads
-            if (
-                k.startswith("mlp_head.")
-                or k.startswith("head.")
-                or k.startswith("fc.")
-                or "classifier" in k
+            raw_key = k[len("backbone."):] if k.startswith("backbone.") else k
+
+            # ViT / ViT-CoPE use mlp_head.0 as the final LayerNorm.
+            # ViT-SCoPE uses norm.weight / norm.bias.
+            if raw_key in ("mlp_head.0.weight", "mlp_head.0.bias"):
+                suffix = raw_key.rsplit(".", 1)[1]
+                new_key = f"backbone.norms.{last_norm_idx}.{suffix}"
+                remapped_final_norm.append(f"{raw_key} -> {new_key}")
+            elif raw_key in ("norm.weight", "norm.bias"):
+                suffix = raw_key.split(".", 1)[1]
+                new_key = f"backbone.norms.{last_norm_idx}.{suffix}"
+                remapped_final_norm.append(f"{raw_key} -> {new_key}")
+            elif (
+                raw_key.startswith("mlp_head.")
+                or raw_key.startswith("head.")
+                or raw_key.startswith("fc.")
+                or "classifier" in raw_key
             ):
-                skipped.append(k)
+                skipped.append(raw_key)
                 continue
-
-            new_key = k if k.startswith("backbone.") else f"backbone.{k}"
+            else:
+                new_key = k if k.startswith("backbone.") else f"backbone.{k}"
             backbone_dict[new_key] = v
 
         model_dict = self.model.state_dict()
-
-        matched = {}
-        unmatched = []
-        interpolated = []
+        matched, unmatched, interpolated = {}, [], []
 
         for k, v in backbone_dict.items():
             if k in model_dict and model_dict[k].shape == v.shape:
@@ -655,9 +551,7 @@ class DetectionTask:
                 and v.shape[-1] == model_dict[k].shape[-1]
             ):
                 matched[k] = self._resize_token_position_embedding(v, model_dict[k])
-                interpolated.append(
-                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
-                )
+                interpolated.append(f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}")
             elif (
                 k in model_dict
                 and k.endswith("cope.pos_emb")
@@ -671,14 +565,10 @@ class DetectionTask:
                     mode="linear",
                     align_corners=False,
                 ).to(dtype=model_dict[k].dtype)
-                interpolated.append(
-                    f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}"
-                )
+                interpolated.append(f"{k}: {tuple(v.shape)} -> {tuple(model_dict[k].shape)}")
             else:
                 if k in model_dict:
-                    unmatched.append(
-                        f"{k} shape mismatch: ckpt={tuple(v.shape)} model={tuple(model_dict[k].shape)}"
-                    )
+                    unmatched.append(f"{k} shape mismatch: ckpt={tuple(v.shape)} model={tuple(model_dict[k].shape)}")
                 else:
                     unmatched.append(f"{k} not in model")
 
@@ -688,18 +578,21 @@ class DetectionTask:
         print(f"   Interpolated position tables: {len(interpolated)}")
         print(f"   Unmatched: {len(unmatched)} keys")
         print(f"   Skipped classifier keys: {len(skipped)}")
+        print(f"   Remapped final norm keys: {len(remapped_final_norm)}")
 
-        if len(matched) > 0:
+        if matched:
             print("\n✅ Sample matched keys:")
             for k in list(matched.keys())[:5]:
                 print(f"     {k}")
-
-        if len(unmatched) > 0:
+        if unmatched:
             print("\n⚠️ Sample unmatched keys:")
             for k in unmatched[:10]:
                 print(f"     {k}")
-
-        if len(interpolated) > 0:
+        if remapped_final_norm:
+            print("\n🔁 Remapped classification final norm:")
+            for k in remapped_final_norm[:4]:
+                print(f"     {k}")
+        if interpolated:
             print("\n🔁 Sample interpolated position tables:")
             for k in interpolated[:5]:
                 print(f"     {k}")
@@ -712,22 +605,18 @@ class DetectionTask:
 
         min_match_rate = float(getattr(self.args, "min_pretrained_match_rate", 80.0))
         if match_rate < min_match_rate:
+            model_backbone_keys = [k for k in model_dict if k.startswith("backbone.")]
             print("\n❌ ERROR: Low match rate. Check whether classification and backbone structures are aligned.")
-            model_backbone_keys = [k for k in model_dict.keys() if k.startswith("backbone.")]
             print(f"   Sample ckpt mapped key: {list(backbone_dict.keys())[0] if backbone_dict else 'NONE'}")
             print(f"   Sample model key: {model_backbone_keys[0] if model_backbone_keys else 'NONE'}")
             raise RuntimeError(
                 f"Pretrained backbone match rate {match_rate:.1f}% is below "
                 f"required {min_match_rate:.1f}% for {pretrained_path}"
             )
-
         print(f"{'=' * 60}\n")
 
-    # ------------------------------------------------------- #
     def _resize_token_position_embedding(self, source, target):
-        """Resize ViT absolute token position embeddings from cls pretraining."""
-        source_tokens = source.shape[1]
-        target_tokens = target.shape[1]
+        source_tokens, target_tokens = source.shape[1], target.shape[1]
         source_patch_with_cls = source_tokens - 1
         target_patch_with_cls = target_tokens - 1
         has_cls = (
@@ -736,44 +625,30 @@ class DetectionTask:
         )
 
         if has_cls:
-            source_cls = source[:, :1]
-            source_patch = source[:, 1:]
+            source_cls, source_patch = source[:, :1], source[:, 1:]
             target_patch_tokens = target_tokens - 1
         else:
-            source_cls = None
-            source_patch = source
+            source_cls, source_patch = None, source
             target_patch_tokens = target_tokens
 
         old_size = int(source_patch.shape[1] ** 0.5)
         new_size = int(target_patch_tokens ** 0.5)
-
         if old_size * old_size != source_patch.shape[1] or new_size * new_size != target_patch_tokens:
             return source
 
-        source_patch = source_patch.reshape(
-            1, old_size, old_size, source.shape[-1]
-        ).permute(0, 3, 1, 2)
+        source_patch = source_patch.reshape(1, old_size, old_size, source.shape[-1]).permute(0, 3, 1, 2)
         source_patch = F.interpolate(
             source_patch.float(),
             size=(new_size, new_size),
             mode="bicubic",
             align_corners=False,
         )
-        source_patch = source_patch.permute(0, 2, 3, 1).reshape(
-            1, target_patch_tokens, source.shape[-1]
-        )
-
-        if source_cls is not None:
-            resized = torch.cat([source_cls.float(), source_patch], dim=1)
-        else:
-            resized = source_patch
-
+        source_patch = source_patch.permute(0, 2, 3, 1).reshape(1, target_patch_tokens, source.shape[-1])
+        resized = torch.cat([source_cls.float(), source_patch], dim=1) if source_cls is not None else source_patch
         return resized.to(dtype=target.dtype)
 
-    # ------------------------------------------------------- #
     def train(self):
         print(f"🚀 Start training {self.args.model} + Mask R-CNN on COCO\n")
-
         train_detector(
             self.model,
             self.datasets,
@@ -783,8 +658,6 @@ class DetectionTask:
             timestamp=time.strftime("%Y%m%d_%H%M%S", time.localtime()),
             meta=dict(),
         )
-
         print("\n✅ Detection training finished!\n")
-
         if self.use_wandb:
             wandb.finish()
