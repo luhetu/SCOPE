@@ -1,10 +1,9 @@
 #!/bin/bash
 #SBATCH -N 1
-#SBATCH -w gpu13
 #SBATCH --mem=56G
-#SBATCH --gres=gpu:hopper:1
+#SBATCH --gres=gpu:ampere:1
 #SBATCH -p gpu-bigmem
-#SBATCH --qos=hopper-test-qos
+#SBATCH --qos=long-high-prio
 #SBATCH --time=4-23:59:59
 #SBATCH -J det_scope_tiny
 #SBATCH -o logs/%x%j.out
