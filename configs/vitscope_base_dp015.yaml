@@ -11,6 +11,8 @@ depth: 12
 heads: 12
 mlp_dim: 3072
 dim_head: 64
+use_cls_token: true
+pool: cls
 lr: 7.5e-4  # 1e-3 * (bs/1024) with bs=768
 min_lr: 0
 warmup_epochs: 5

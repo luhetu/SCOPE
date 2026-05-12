@@ -116,18 +116,19 @@ class FeedForward(nn.Module):
 
 # ---------------- Attention ----------------
 class Attention(nn.Module):
-    def __init__(self, dim, heads=6, dim_head=32, num_patches=196, dropout=0.):
+    def __init__(self, dim, heads=6, dim_head=32, num_patches=196, dropout=0., use_cls_token=True):
         super().__init__()
 
         inner = dim_head * heads
 
         self.heads = heads
+        self.use_cls_token = use_cls_token
         self.scale = dim_head ** -0.5
 
         self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
 
         self.cope = CoPE(
-            npos_max=num_patches + 1,
+            npos_max=num_patches + (1 if use_cls_token else 0),
             dim_head=dim_head,
         )
 
@@ -143,13 +144,14 @@ class Attention(nn.Module):
         self.vis_fused_gate = None
 
     def forward(self, x, hk_gate_1d):
-        # x: [B, 1 + N, dim]
+        # x: [B, N(+CLS), dim]
         # hk_gate_1d: [B, N]
         B, N_all, _ = x.shape
 
-        assert hk_gate_1d.shape[1] == N_all - 1, (
+        expected_patches = N_all - 1 if self.use_cls_token else N_all
+        assert hk_gate_1d.shape[1] == expected_patches, (
             f"HKGate length should equal patch count, "
-            f"got hk_gate={hk_gate_1d.shape[1]}, patches={N_all - 1}"
+            f"got hk_gate={hk_gate_1d.shape[1]}, patches={expected_patches}"
         )
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
@@ -163,11 +165,13 @@ class Attention(nn.Module):
 
         offset, cope_gate = self.cope(q, dots)
 
-        # No CLS-aware gating: CLS uses neutral gate = 1.0
-        cls_gate = hk_gate_1d.new_ones((B, 1))  # [B,1]
-
-        hk_full = torch.cat([cls_gate, hk_gate_1d], dim=1)  # [B,1+N]
-        hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)  # [B,H,1+N]
+        if self.use_cls_token:
+            # No CLS-aware gating: CLS uses neutral gate = 1.0
+            cls_gate = hk_gate_1d.new_ones((B, 1))  # [B,1]
+            hk_full = torch.cat([cls_gate, hk_gate_1d], dim=1)  # [B,1+N]
+        else:
+            hk_full = hk_gate_1d  # [B,N]
+        hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)  # [B,H,N_all]
 
         lam = torch.sigmoid(self.lam)
 
@@ -202,6 +206,7 @@ class Transformer(nn.Module):
         num_patches,
         dropout=0.,
         drop_path_rate=0.,
+        use_cls_token=True,
     ):
         super().__init__()
 
@@ -217,6 +222,7 @@ class Transformer(nn.Module):
                         dim_head=dim_head,
                         num_patches=num_patches,
                         dropout=dropout,
+                        use_cls_token=use_cls_token,
                     ),
                 ),
                 PreNorm(
@@ -258,8 +264,13 @@ class ViTSCoPE_NoCLS(nn.Module):
         dropout=0.0,
         emb_dropout=0.0,
         drop_path_rate=0.0,
+        use_cls_token=True,
+        pool="cls",
     ):
         super().__init__()
+        if pool == "cls" and not use_cls_token:
+            raise ValueError("pool='cls' requires use_cls_token=True")
+        assert pool in {"cls", "mean"}, "pool must be 'cls' or 'mean'"
 
         H, W = pair(image_size)
         pH, pW = pair(patch_size)
@@ -280,8 +291,12 @@ class ViTSCoPE_NoCLS(nn.Module):
             nn.Linear(patch_dim, dim),
         )
 
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.use_cls_token = use_cls_token
+        self.pool = pool
+
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
 
         self.drop = nn.Dropout(emb_dropout)
 
@@ -294,6 +309,7 @@ class ViTSCoPE_NoCLS(nn.Module):
             num_patches=N,
             dropout=dropout,
             drop_path_rate=drop_path_rate,
+            use_cls_token=use_cls_token,
         )
 
         self.norm = nn.LayerNorm(dim)
@@ -311,8 +327,9 @@ class ViTSCoPE_NoCLS(nn.Module):
 
         x = self.to_patch(img)  # [B, N, dim]
 
-        cls = self.cls_token.expand(B, 1, -1)
-        x = torch.cat([cls, x], dim=1)
+        if self.use_cls_token:
+            cls = self.cls_token.expand(B, 1, -1)
+            x = torch.cat([cls, x], dim=1)
 
         x = self.drop(x)
 
@@ -320,7 +337,12 @@ class ViTSCoPE_NoCLS(nn.Module):
 
         x = self.norm(x)
 
-        return self.head(x[:, 0])
+        if self.pool == "mean":
+            x = x[:, 1:].mean(dim=1) if self.use_cls_token else x.mean(dim=1)
+        else:
+            x = x[:, 0]
+
+        return self.head(x)
 
 
 ViTScope_NoCLS = ViTSCoPE_NoCLS

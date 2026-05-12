@@ -74,29 +74,34 @@ class FeedForward(nn.Module):
 
 # ---------------- Attention: Q-offset + λ convex combination fusion + CLS gate ----------------
 class Attention(nn.Module):
-    def __init__(self, dim, heads=6, dim_head=32, num_patches=196, dropout=0.):
+    def __init__(self, dim, heads=6, dim_head=32, num_patches=196, dropout=0., use_cls_token=True):
         super().__init__()
         inner = dim_head * heads
         self.heads = heads
+        self.use_cls_token = use_cls_token
         self.scale = dim_head ** -0.5
         self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
-        self.cope  = CoPE(npos_max=num_patches + 1, dim_head=dim_head)  # +1 includes CLS
+        self.cope  = CoPE(npos_max=num_patches + (1 if use_cls_token else 0), dim_head=dim_head)
         self.lam   = nn.Parameter(torch.tensor(0.5))                    # Learn λ for convex combination
         self.to_out = nn.Sequential(nn.Linear(inner, dim), nn.Dropout(dropout))
 
     def forward(self, x, hk_gate_1d):
-        # x: [B,1+N,dim], hk_gate_1d: [B,N] (aligned to patches)
+        # x: [B, N(+CLS), dim], hk_gate_1d: [B,N] (aligned to patches)
         B, N_all, _ = x.shape
-        assert hk_gate_1d.shape[1] == N_all - 1, "HKGate length should equal patch count"
+        expected_patches = N_all - 1 if self.use_cls_token else N_all
+        assert hk_gate_1d.shape[1] == expected_patches, "HKGate length should equal patch count"
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q,k,v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
         dots = torch.matmul(q, k.transpose(-1,-2)) * self.scale         # [B,H,N_all,N_all]
         offset, cope_gate = self.cope(q, dots)                           # offset:[B,H,N_all,D], cope_gate:[B,H,N_all]
 
-        # CLS gate from CoPE column 0 (multi-head average), concatenated with HKGate
-        cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)     # [B,1]
-        hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)          # [B,N_all]
+        if self.use_cls_token:
+            # CLS gate from CoPE column 0 (multi-head average), concatenated with HKGate
+            cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True) # [B,1]
+            hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)      # [B,N_all]
+        else:
+            hk_full = hk_gate_1d                                        # [B,N_all]
         hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)        # [B,H,N_all]
 
         # Convex combination fusion (avoid secondary sigmoid flattening dynamic range)
@@ -110,11 +115,11 @@ class Attention(nn.Module):
 
 # ---------------- Transformer ----------------
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, mlp_dim, num_patches, dropout=0.):
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, num_patches, dropout=0., use_cls_token=True):
         super().__init__()
         self.layers = nn.ModuleList([
             nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads, dim_head, num_patches, dropout)),
+                PreNorm(dim, Attention(dim, heads, dim_head, num_patches, dropout, use_cls_token)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout)),
             ]) for _ in range(depth)
         ])
@@ -132,8 +137,12 @@ class ViTSCoPE(nn.Module):
     """
     def __init__(self, *, image_size=224, patch_size=16,
                  num_classes=1000, dim=192, depth=12, heads=6, mlp_dim=768,
-                 channels=3, dim_head=32, dropout=0.0, emb_dropout=0.0):
+                 channels=3, dim_head=32, dropout=0.0, emb_dropout=0.0,
+                 use_cls_token=True, pool="cls"):
         super().__init__()
+        if pool == "cls" and not use_cls_token:
+            raise ValueError("pool='cls' requires use_cls_token=True")
+        assert pool in {"cls", "mean"}, "pool must be 'cls' or 'mean'"
         H, W = pair(image_size); pH, pW = pair(patch_size)
         assert H % pH == 0 and W % pW == 0
         h_p, w_p = H // pH, W // pW
@@ -144,11 +153,15 @@ class ViTSCoPE(nn.Module):
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=pH, p2=pW),
             nn.Linear(patch_dim, dim)
         )
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.use_cls_token = use_cls_token
+        self.pool = pool
+
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
 
         self.drop = nn.Dropout(emb_dropout)
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, N, dropout)
+        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim, N, dropout, use_cls_token)
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, num_classes)
         nn.init.trunc_normal_(self.head.weight, std=0.02)
@@ -161,12 +174,17 @@ class ViTSCoPE(nn.Module):
         hk_gate_1d = self.hk_gate(img)                  # [B, N]
 
         x = self.to_patch(img)                          # [B, N, dim]
-        cls = self.cls_token.expand(B, 1, -1)          # [B, 1, dim]
-        x = torch.cat([cls, x], dim=1)                 # [B, 1+N, dim]
+        if self.use_cls_token:
+            cls = self.cls_token.expand(B, 1, -1)      # [B, 1, dim]
+            x = torch.cat([cls, x], dim=1)             # [B, 1+N, dim]
         x = self.drop(x)
 
         x = self.transformer(x, hk_gate_1d)
         x = self.norm(x)
-        return self.head(x[:, 0])
+        if self.pool == "mean":
+            x = x[:, 1:].mean(dim=1) if self.use_cls_token else x.mean(dim=1)
+        else:
+            x = x[:, 0]
+        return self.head(x)
 
 ViTScope = ViTSCoPE

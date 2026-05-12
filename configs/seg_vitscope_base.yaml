@@ -13,6 +13,7 @@ depth: 12
 heads: 12
 mlp_dim: 3072
 dim_head: 64
+use_cls_token: true
 
 # ADE20K UPerNet 40K protocol; n_epochs is kept as an approximate reference.
 max_iters: 40000

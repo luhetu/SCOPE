@@ -17,6 +17,7 @@ depth: 12
 heads: 3
 mlp_dim: 768
 dim_head: 64
+use_cls_token: true
 
 # Training configuration - Fully consistent with ViT
 n_epochs: 12

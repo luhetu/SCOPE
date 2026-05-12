@@ -395,7 +395,11 @@ class SegmentationTask:
             )
 
         if args.model == "vitscope":
-            return dict(type="ViTSCoPEBackbone", **common)
+            return dict(
+                type="ViTSCoPEBackbone",
+                use_cls_token=bool(getattr(args, "use_cls_token", True)),
+                **common,
+            )
 
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 

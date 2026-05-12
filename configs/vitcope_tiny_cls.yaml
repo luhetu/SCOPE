@@ -1,19 +1,21 @@
 task: cls
-model: vitscope_nocls
+model: vitcope
 dataset: imagenet
 data_dir: /tmp/vitcope
-bs: 256
+bs: 768
 size: 224
 n_epochs: 300
 patch: 16
-dim: 1024
-depth: 24
-heads: 16
-mlp_dim: 4096
+dim: 192
+depth: 12
+heads: 3
+mlp_dim: 768
 dim_head: 64
 use_cls_token: true
 pool: cls
-lr: 2.5e-4  # 1e-3 * (bs/1024) with bs=256
+dropout: 0.1
+emb_dropout: 0.1
+lr: 7.5e-4  # 1e-3 * (bs/1024) with bs=768
 min_lr: 0
 warmup_epochs: 5
 weight_decay: 0.05
@@ -28,5 +30,5 @@ random_erasing: true
 repeated_augmentations: true
 label_smoothing: true
 stochastic_depth: true
-drop_path_rate: 0.1
+drop_path_rate: 0
 nowandb: false

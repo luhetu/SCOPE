@@ -12,6 +12,7 @@ depth: 12
 heads: 6
 mlp_dim: 1536
 dim_head: 64
+use_cls_token: true
 
 n_epochs: 12  # 1x schedule
 lr: 2.5e-5  # 1e-4 * (bs/16) with bs=4

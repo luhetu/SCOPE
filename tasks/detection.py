@@ -368,7 +368,11 @@ class DetectionTask:
                 **common,
             )
         if args.model == "vitscope":
-            return dict(type="ViTSCoPEBackbone", **common)
+            return dict(
+                type="ViTSCoPEBackbone",
+                use_cls_token=bool(getattr(args, "use_cls_token", True)),
+                **common,
+            )
         raise ValueError(f"Unknown detection backbone model: {args.model}")
 
     def _get_backbone_out_channels(self):

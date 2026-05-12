@@ -27,5 +27,5 @@ layer_decay_rate: 1.0
 opt: adamw
 amp: true
 nowandb: false
-use_cls_token: false
+use_cls_token: true
 drop_path_rate: 0.0

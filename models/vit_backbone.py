@@ -190,13 +190,25 @@ class HKGate(nn.Module):
 
 class AttentionSCoPE(nn.Module):
     """SCoPE attention aligned with models/vitscope.py pretraining."""
-    def __init__(self, dim, heads=8, dim_head=64, num_patches=196, dropout=0.0):
+    def __init__(
+        self,
+        dim,
+        heads=8,
+        dim_head=64,
+        num_patches=196,
+        dropout=0.0,
+        use_cls_token=True,
+    ):
         super().__init__()
         inner = heads * dim_head
         self.heads = heads
+        self.use_cls_token = use_cls_token
         self.scale = dim_head ** -0.5
         self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
-        self.cope = CoPE(npos_max=num_patches + 1, dim_head=dim_head)
+        self.cope = CoPE(
+            npos_max=num_patches + (1 if use_cls_token else 0),
+            dim_head=dim_head,
+        )
         self.lam = nn.Parameter(torch.tensor(0.5))
         self.to_out = nn.Sequential(nn.Linear(inner, dim), nn.Dropout(dropout))
         self.vis_attn = None
@@ -204,11 +216,12 @@ class AttentionSCoPE(nn.Module):
         self.vis_fused_gate = None
 
     def forward(self, x, hk_gate_1d):
-        # x: [B, 1 + N, dim], hk_gate_1d: [B, N]
+        # x: [B, N(+CLS), dim], hk_gate_1d: [B, N]
         B, N_all, _ = x.shape
-        assert hk_gate_1d.shape[1] == N_all - 1, (
+        expected_patches = N_all - 1 if self.use_cls_token else N_all
+        assert hk_gate_1d.shape[1] == expected_patches, (
             f"HKGate length should equal patch tokens. "
-            f"Got hk_gate={hk_gate_1d.shape[1]}, tokens={N_all - 1}."
+            f"Got hk_gate={hk_gate_1d.shape[1]}, tokens={expected_patches}."
         )
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
@@ -220,10 +233,13 @@ class AttentionSCoPE(nn.Module):
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         offset, cope_gate = self.cope(q, dots)
 
-        # Important: match models/vitscope.py.
-        # CLS gate comes from CoPE token 0, not a fixed neutral 1.0.
-        cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)
-        hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)
+        if self.use_cls_token:
+            # Important: match models/vitscope.py.
+            # CLS gate comes from CoPE token 0, not a fixed neutral 1.0.
+            cls_from_cope = cope_gate[:, :, 0].mean(dim=1, keepdim=True)
+            hk_full = torch.cat([cls_from_cope, hk_gate_1d], dim=1)
+        else:
+            hk_full = hk_gate_1d
         hk_full = hk_full.unsqueeze(1).expand(-1, self.heads, -1)
 
         lam = torch.sigmoid(self.lam)
@@ -291,6 +307,7 @@ class TransformerSCoPE(nn.Module):
         num_patches=196,
         dropout=0.0,
         drop_path_rate=0.0,
+        use_cls_token=True,
     ):
         super().__init__()
         dpr = torch.linspace(0, drop_path_rate, depth).tolist()
@@ -306,6 +323,7 @@ class TransformerSCoPE(nn.Module):
                         dim_head=dim_head,
                         num_patches=num_patches,
                         dropout=dropout,
+                        use_cls_token=use_cls_token,
                     ),
                 ),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout)),
@@ -586,6 +604,7 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
         drop_path_rate=0.0,
         out_indices=(2, 5, 8, 11),
         fpn_adapter_style="simple_fpn",
+        use_cls_token=True,
     ):
         super().__init__()
         image_height, image_width = pair(image_size)
@@ -598,6 +617,7 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
         self.patch_size = patch_size
         self.dim = dim
         self.out_indices = tuple(out_indices)
+        self.use_cls_token = use_cls_token
         self.to_patch = nn.Sequential(
             Rearrange(
                 "b c (h p1) (w p2) -> b (h w) (p1 p2 c)",
@@ -606,8 +626,9 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
             ),
             nn.Linear(patch_dim, dim),
         )
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
         self.drop = nn.Dropout(emb_dropout)
         self.hk_gate = HKGate(patch_size=patch_size)
         self.transformer = TransformerSCoPE(
@@ -619,6 +640,7 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
             num_patches=num_patches,
             dropout=dropout,
             drop_path_rate=drop_path_rate,
+            use_cls_token=use_cls_token,
         )
         self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in self.out_indices])
         self.fpn_adapters = self._build_simple_fpn_adapters(dim, fpn_adapter_style)
@@ -630,8 +652,9 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
 
         hk_gate_1d = self.hk_gate(img)
         x = self.to_patch(img)
-        cls = self.cls_token.expand(B, -1, -1)
-        x = torch.cat([cls, x], dim=1)
+        if self.use_cls_token:
+            cls = self.cls_token.expand(B, -1, -1)
+            x = torch.cat([cls, x], dim=1)
         x = self.drop(x)
 
         outs = []
@@ -640,7 +663,15 @@ class ViTSCoPEBackbone(nn.Module, BackboneFeatureMixin):
             x = x + drop_path2(ff(x))
             if i in self.out_indices:
                 norm_idx = self.out_indices.index(i)
-                outs.append(self._format_out(x, actual_h, actual_w, norm_idx, has_cls=True))
+                outs.append(
+                    self._format_out(
+                        x,
+                        actual_h,
+                        actual_w,
+                        norm_idx,
+                        has_cls=self.use_cls_token,
+                    )
+                )
         return tuple(outs)
 
     def init_weights(self, pretrained=None):

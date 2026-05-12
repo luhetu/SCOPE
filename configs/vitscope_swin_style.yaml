@@ -12,6 +12,8 @@ depth: 12
 heads: 6
 mlp_dim: 1536
 dim_head: 64
+use_cls_token: true
+pool: cls
 lr: 1.5e-4             # Half of base learning rate (bs=128)
 min_lr: 5e-6
 warmup_epochs: 5

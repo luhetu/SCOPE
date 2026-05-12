@@ -117,6 +117,10 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
                 dim_head=dim_head,
+                dropout=float(getattr(args, "dropout", 0.0)),
+                emb_dropout=float(getattr(args, "emb_dropout", 0.0)),
+                use_cls_token=bool(getattr(args, "use_cls_token", True)),
+                pool=getattr(args, "pool", "cls"),
             )
             model_kwargs = self._maybe_add_drop_path(ViTScope, model_kwargs, drop_path_rate)
             self.net = ViTScope(**model_kwargs)
@@ -134,6 +138,10 @@ class ClassificationTask:
                 heads=args.heads,
                 mlp_dim=args.mlp_dim,
                 dim_head=dim_head,
+                dropout=float(getattr(args, "dropout", 0.0)),
+                emb_dropout=float(getattr(args, "emb_dropout", 0.0)),
+                use_cls_token=bool(getattr(args, "use_cls_token", True)),
+                pool=getattr(args, "pool", "cls"),
             )
             model_kwargs = self._maybe_add_drop_path(ViTScope_NoCLS, model_kwargs, drop_path_rate)
             self.net = ViTScope_NoCLS(**model_kwargs)
