@@ -325,22 +325,6 @@ class DetectionTask:
 
     def _get_backbone_config(self):
         args = self.args
-        common = dict(
-            image_size=args.size,
-            patch_size=args.patch,
-            dim=args.dim,
-            depth=args.depth,
-            heads=args.heads,
-            mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
-            fpn_adapter_style=(
-                "simple_fpn"
-                if str(getattr(args, "det_neck_type", "simple_fpn")).lower() == "fpn"
-                else "identity"
-            ),
-        )
         if args.model == "swin":
             return dict(
                 type="SwinTransformer",
@@ -359,6 +343,23 @@ class DetectionTask:
                 out_indices=(0, 1, 2, 3),
                 use_checkpoint=False,
             )
+
+        common = dict(
+            image_size=args.size,
+            patch_size=args.patch,
+            dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            mlp_dim=args.mlp_dim,
+            dim_head=getattr(args, "dim_head", 64),
+            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
+            fpn_adapter_style=(
+                "simple_fpn"
+                if str(getattr(args, "det_neck_type", "simple_fpn")).lower() == "fpn"
+                else "identity"
+            ),
+        )
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":

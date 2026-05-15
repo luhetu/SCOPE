@@ -230,9 +230,11 @@ def _check_segmentation_config(path, data, errors, warnings):
         errors.append(f"{path}: expected UPerHead decode head")
     if model.get("auxiliary_head", {}).get("type") != "FCNHead":
         errors.append(f"{path}: expected FCNHead auxiliary head")
-    if cfg.data.train.get("type") != "ADE20KDataset":
+    train_data = cfg.data["train"]
+    val_data = cfg.data["val"]
+    if train_data.get("type") != "ADE20KDataset":
         errors.append(f"{path}: train dataset is not ADE20KDataset")
-    if cfg.data.val.get("ann_dir") != "annotations/validation":
+    if val_data.get("ann_dir") != "annotations/validation":
         errors.append(f"{path}: validation annotations path is not ADE20K validation")
     if cfg.evaluation.get("metric") != "mIoU":
         errors.append(f"{path}: segmentation metric should be mIoU")
@@ -249,7 +251,7 @@ def _check_segmentation_config(path, data, errors, warnings):
     if expected and backbone_type != expected:
         errors.append(f"{path}: expected backbone {expected}, got {backbone_type}")
 
-    data_root = str(cfg.data.train.get("data_root", ""))
+    data_root = str(train_data.get("data_root", ""))
     if data_root.startswith("/home"):
         warnings.append(f"{path}: data_dir is machine-specific: {data_root}")
 
@@ -270,9 +272,11 @@ def _check_detection_config(path, data, errors, warnings):
         errors.append(f"{path}: expected RPNHead")
     if model.get("roi_head", {}).get("mask_head", {}).get("type") != "FCNMaskHead":
         errors.append(f"{path}: expected FCNMaskHead mask head")
-    if cfg.data.train.get("type") != "CocoDataset":
+    train_data = cfg.data["train"]
+    val_data = cfg.data["val"]
+    if train_data.get("type") != "CocoDataset":
         errors.append(f"{path}: train dataset is not CocoDataset")
-    if not str(cfg.data.val.get("ann_file", "")).endswith("instances_val2017.json"):
+    if not str(val_data.get("ann_file", "")).endswith("instances_val2017.json"):
         errors.append(f"{path}: validation annotation file is not COCO val2017")
     if cfg.evaluation.get("metric") != ["bbox", "segm"]:
         errors.append(f"{path}: detection metrics should be ['bbox', 'segm']")
@@ -295,7 +299,7 @@ def _check_detection_config(path, data, errors, warnings):
     if expected and backbone_type != expected:
         errors.append(f"{path}: expected backbone {expected}, got {backbone_type}")
 
-    data_root = str(cfg.data.train.get("ann_file", ""))
+    data_root = str(train_data.get("ann_file", ""))
     if data_root.startswith("/home"):
         warnings.append(f"{path}: data_dir is machine-specific: {args.data_dir}")
 
