@@ -1,5 +1,27 @@
 import yaml
 import os
+import sys
+
+
+def _explicit_cli_dests(parser, argv=None):
+    """Return parser destinations that were explicitly provided on the CLI."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    explicit = set()
+
+    option_to_dest = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_to_dest[option] = action.dest
+
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest:
+            explicit.add(dest)
+
+    return explicit
 
 
 def load_cfg(parser):
@@ -8,7 +30,8 @@ def load_cfg(parser):
     """
     # 先解析命令行参数
     args = parser.parse_args()
-    cli_model = getattr(args, 'model', None)
+    explicit_dests = _explicit_cli_dests(parser)
+    cli_overrides = {dest: getattr(args, dest) for dest in explicit_dests if hasattr(args, dest)}
     
     # 如果指定了Configuration文件，Load并覆盖
     if args.cfg and os.path.isfile(args.cfg):
@@ -40,9 +63,11 @@ def load_cfg(parser):
             setattr(args, key, value)
         
         print(f"✅ [cfg] SuccessLoad {len(cfg)} 个参数")
-        if cli_model is not None:
-            args.model = cli_model
-            print(f"✅ [cfg] Override model from CLI: {cli_model}")
+        for dest, value in sorted(cli_overrides.items()):
+            if dest == "cfg":
+                continue
+            setattr(args, dest, value)
+            print(f"✅ [cfg] Override {dest} from CLI: {value}")
     elif args.cfg:
         print(f"⚠️  [cfg] Configuration文件不存在：{args.cfg}")
     
