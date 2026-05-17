@@ -14,6 +14,7 @@ depth: 12
 heads: 3
 mlp_dim: 768
 dim_head: 64
+out_indices: [3, 5, 7, 11]
 
 # ADE20K UPerNet 40K protocol; n_epochs is kept as an approximate reference.
 max_iters: 40000
@@ -26,4 +27,10 @@ layer_decay_rate: 1.0
 opt: adamw
 amp: true
 nowandb: false
-drop_path_rate: 0.1
+
+# Strict ViT-Tiny segmentation protocol
+seg_head_dim: 192
+seg_aux_dim: 192
+seg_aux_in_index: 2
+seg_norm_type: SyncBN
+drop_path_rate: 0.0
