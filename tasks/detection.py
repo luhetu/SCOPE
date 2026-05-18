@@ -51,6 +51,10 @@ def _as_scale(value, default=(1333, 800)):
     return (v, v)
 
 
+def _default(value, fallback):
+    return fallback if value is None else value
+
+
 class DetectionTask:
     def __init__(self, args):
         self.args = args
@@ -101,7 +105,7 @@ class DetectionTask:
             type="AdamW",
             lr=args.lr,
             betas=_as_betas(getattr(args, "betas", None)),
-            weight_decay=getattr(args, "weight_decay", 0.05),
+            weight_decay=_default(getattr(args, "weight_decay", None), 0.05),
             paramwise_cfg=dict(custom_keys={
                 "pos_embedding": dict(decay_mult=0.0),
                 "pos_emb": dict(decay_mult=0.0),
@@ -121,7 +125,7 @@ class DetectionTask:
 
         warmup_iters = getattr(args, "warmup_iters", None)
         if warmup_iters is None:
-            warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
+            warmup_iters = int(_default(getattr(args, "warmup_epochs", None), 0) * 1000)
         cfg.lr_config = dict(
             policy="step",
             warmup="linear" if warmup_iters > 0 else None,
@@ -132,7 +136,7 @@ class DetectionTask:
         cfg.runner = dict(type="EpochBasedRunner", max_epochs=args.n_epochs)
         cfg.checkpoint_config = dict(interval=1, filename_tmpl=f"{self.run_name}_{args.task or 'det'}_epoch_{{}}.pth", max_keep_ckpts=3)
         cfg.evaluation = dict(interval=1, metric=["bbox", "segm"], save_best="bbox_mAP", classwise=False)
-        cfg.log_config = dict(interval=int(getattr(args, "log_interval", 50)), hooks=[dict(type="TextLoggerHook")])
+        cfg.log_config = dict(interval=int(_default(getattr(args, "log_interval", None), 50)), hooks=[dict(type="TextLoggerHook")])
         cfg.custom_hooks = [dict(type="NumClassCheckHook")]
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
@@ -146,7 +150,7 @@ class DetectionTask:
         print("\n✅ MMDet config summary")
         print(f"   epochs: {args.n_epochs}")
         print(f"   lr: {args.lr}")
-        print(f"   weight_decay: {getattr(args, 'weight_decay', 0.05)}")
+        print(f"   weight_decay: {_default(getattr(args, 'weight_decay', None), 0.05)}")
         print(f"   warmup_iters: {warmup_iters}")
         print(f"   img_scale: {_as_scale(getattr(args, 'img_scale', None))}")
         print(f"   work_dir: {cfg.work_dir}")
@@ -214,6 +218,8 @@ class DetectionTask:
 
     def _get_backbone_config(self):
         args = self.args
+        if args.model == "swin":
+            return dict(type="SwinTransformer", embed_dim=args.embed_dim, depths=args.depths, num_heads=args.num_heads, window_size=args.window_size, mlp_ratio=4.0, qkv_bias=True, qk_scale=None, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=float(_default(getattr(args, "drop_path_rate", None), 0.0)), ape=False, patch_norm=True, out_indices=(0, 1, 2, 3), use_checkpoint=False)
         common = dict(
             image_size=args.size,
             patch_size=args.patch,
@@ -221,13 +227,11 @@ class DetectionTask:
             depth=args.depth,
             heads=args.heads,
             mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
-            fpn_adapter_style=("simple_fpn" if str(getattr(args, "det_neck_type", "fpn")).lower() == "fpn" else "identity"),
+            dim_head=_default(getattr(args, "dim_head", None), 64),
+            drop_path_rate=float(_default(getattr(args, "drop_path_rate", None), 0.0)),
+            out_indices=tuple(_default(getattr(args, "out_indices", None), (3, 5, 7, 11))),
+            fpn_adapter_style=("simple_fpn" if str(_default(getattr(args, "det_neck_type", None), "fpn")).lower() == "fpn" else "identity"),
         )
-        if args.model == "swin":
-            return dict(type="SwinTransformer", embed_dim=args.embed_dim, depths=args.depths, num_heads=args.num_heads, window_size=args.window_size, mlp_ratio=4.0, qkv_bias=True, qk_scale=None, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)), ape=False, patch_norm=True, out_indices=(0, 1, 2, 3), use_checkpoint=False)
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
@@ -279,7 +283,7 @@ class DetectionTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(_default(getattr(args, "workers_per_gpu", None), 4)),
             train=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_train2017.json", img_prefix=f"{args.data_dir}/train2017/", pipeline=train_pipeline),
             val=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
             test=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
