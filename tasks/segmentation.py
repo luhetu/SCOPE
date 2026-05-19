@@ -51,6 +51,11 @@ def _as_pair(value, default):
     return (int(value), int(value))
 
 
+def _arg_or_default(args, name, default):
+    value = getattr(args, name, default)
+    return default if value is None else value
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -107,7 +112,7 @@ class SegmentationTask:
             type="AdamW",
             lr=args.lr,
             betas=_as_betas(getattr(args, "betas", None)),
-            weight_decay=getattr(args, "weight_decay", 0.01),
+            weight_decay=_arg_or_default(args, "weight_decay", 0.01),
             paramwise_cfg=self._get_paramwise_cfg(),
         )
         cfg.optimizer_config = dict(grad_clip=None)
@@ -135,20 +140,20 @@ class SegmentationTask:
         )
         cfg.checkpoint_config = dict(
             by_epoch=False,
-            interval=int(getattr(args, "checkpoint_interval", 5000)),
+            interval=int(_arg_or_default(args, "checkpoint_interval", 5000)),
             filename_tmpl=f"{self.run_name}_{args.task or 'seg'}_iter_{{}}.pth",
             max_keep_ckpts=3,
         )
 
-        log_interval = int(getattr(args, "log_interval", 100))
-        eval_interval = int(getattr(args, "eval_interval", 2001))
+        log_interval = int(_arg_or_default(args, "log_interval", 100))
+        eval_interval = int(_arg_or_default(args, "eval_interval", 2001))
         if eval_interval % log_interval == 0:
             eval_interval += 1
         cfg.evaluation = dict(interval=eval_interval, metric="mIoU", pre_eval=True, save_best="mIoU", classwise=False)
         cfg.log_config = dict(interval=log_interval, hooks=[dict(type="TextLoggerHook", by_epoch=False)])
 
         cfg.custom_hooks = []
-        cfg.final_eval = bool(getattr(args, "final_eval", True))
+        cfg.final_eval = bool(_arg_or_default(args, "final_eval", True))
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
         cfg.work_dir = f"./work_dirs/{self.run_name}_upernet"
@@ -162,19 +167,19 @@ class SegmentationTask:
         print("\n✅ MMSeg config summary")
         print(f"   max_iters: {max_iters}")
         print(f"   lr: {args.lr}")
-        print(f"   weight_decay: {getattr(args, 'weight_decay', 0.01)}")
-        print(f"   layer_decay_rate: {getattr(args, 'layer_decay_rate', 1.0)}")
-        print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
+        print(f"   weight_decay: {_arg_or_default(args, 'weight_decay', 0.01)}")
+        print(f"   layer_decay_rate: {_arg_or_default(args, 'layer_decay_rate', 1.0)}")
+        print(f"   crop_size: {_arg_or_default(args, 'crop_size', 512)}")
         print(f"   backbone_image_size: {self._get_backbone_image_size()}")
-        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'SyncBN')}")
+        print(f"   seg_head_dim: {_arg_or_default(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_aux_dim: {_arg_or_default(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_norm_type: {_arg_or_default(args, 'seg_norm_type', 'SyncBN')}")
         print(f"   work_dir: {cfg.work_dir}")
         return cfg
 
     def _get_paramwise_cfg(self):
         args = self.args
-        layer_decay_rate = float(getattr(args, "layer_decay_rate", 1.0))
+        layer_decay_rate = float(_arg_or_default(args, "layer_decay_rate", 1.0))
         custom_keys = {
             "backbone.pos_embedding": dict(decay_mult=0.0),
             "cope.pos_emb": dict(decay_mult=0.0),
@@ -204,15 +209,15 @@ class SegmentationTask:
 
     def _get_upernet_config(self):
         in_channels = self._get_backbone_out_channels()
-        head_dim = int(getattr(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
-        aux_dim = int(getattr(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
-        aux_idx = int(getattr(self.args, "seg_aux_in_index", 2))
+        head_dim = int(_arg_or_default(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
+        aux_dim = int(_arg_or_default(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
+        aux_idx = int(_arg_or_default(self.args, "seg_aux_in_index", 2))
         norm_cfg = self._get_seg_norm_cfg()
 
         neck_cfg = None
         seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
-            neck_dim = int(getattr(self.args, "seg_neck_dim", in_channels[0]))
+            neck_dim = int(_arg_or_default(self.args, "seg_neck_dim", in_channels[0]))
             neck_cfg = dict(type="MultiLevelNeck", in_channels=in_channels, out_channels=neck_dim, scales=[4, 2, 1, 0.5])
             in_channels = [neck_dim] * 4
 
@@ -252,16 +257,17 @@ class SegmentationTask:
 
     def _get_default_seg_head_dim(self):
         # Scratching ViT protocol: Ti/S/B use head dims 192/384/512 respectively.
-        return int(getattr(self.args, "dim", 512))
+        return int(_arg_or_default(self.args, "dim", 512))
 
     def _get_seg_norm_cfg(self):
-        norm_type = str(getattr(self.args, "seg_norm_type", "SyncBN"))
+        norm_type = str(_arg_or_default(self.args, "seg_norm_type", "SyncBN"))
         if norm_type.upper() == "GN":
             return dict(type="GN", num_groups=32, requires_grad=True)
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        default_size = _arg_or_default(self.args, "crop_size", self.args.size)
+        value = _arg_or_default(self.args, "backbone_size", default_size)
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
@@ -354,7 +360,7 @@ class SegmentationTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(_arg_or_default(args, "workers_per_gpu", 4)),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
