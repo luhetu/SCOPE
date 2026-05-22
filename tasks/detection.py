@@ -245,6 +245,9 @@ class DetectionTask:
         args = self.args
         img_scale = _as_scale(getattr(args, "img_scale", None))
         img_norm_cfg = dict(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+        workers_per_gpu = getattr(args, "workers_per_gpu", None)
+        if workers_per_gpu is None:
+            workers_per_gpu = 4
 
         # Official XCiT/DETR-style AutoAugment scale order.
         train_scales = [(480, 1333), (512, 1333), (544, 1333), (576, 1333), (608, 1333), (640, 1333), (672, 1333), (704, 1333), (736, 1333), (768, 1333), (800, 1333)]
@@ -279,7 +282,7 @@ class DetectionTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(workers_per_gpu),
             train=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_train2017.json", img_prefix=f"{args.data_dir}/train2017/", pipeline=train_pipeline),
             val=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
             test=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),

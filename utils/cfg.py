@@ -8,7 +8,12 @@ def load_cfg(parser):
     """
     # 先解析命令行参数
     args = parser.parse_args()
-    cli_model = getattr(args, 'model', None)
+    cli_override_keys = ('model', 'data_dir', 'workers_per_gpu')
+    cli_overrides = {
+        key: getattr(args, key)
+        for key in cli_override_keys
+        if getattr(args, key, None) not in (None, '')
+    }
     
     # 如果指定了Configuration文件，Load并覆盖
     if args.cfg and os.path.isfile(args.cfg):
@@ -40,9 +45,9 @@ def load_cfg(parser):
             setattr(args, key, value)
         
         print(f"✅ [cfg] SuccessLoad {len(cfg)} 个参数")
-        if cli_model is not None:
-            args.model = cli_model
-            print(f"✅ [cfg] Override model from CLI: {cli_model}")
+        for key, value in cli_overrides.items():
+            setattr(args, key, value)
+            print(f"✅ [cfg] Override {key} from CLI: {value}")
     elif args.cfg:
         print(f"⚠️  [cfg] Configuration文件不存在：{args.cfg}")
     
