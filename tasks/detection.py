@@ -158,7 +158,7 @@ class DetectionTask:
         return cfg
 
     def _get_mask_rcnn_config(self):
-        neck_type = str(getattr(self.args, "det_neck_type", "fpn")).lower()
+        neck_type = str(_get_arg(self.args, "det_neck_type", "fpn")).lower()
         if neck_type == "fpn":
             neck_cfg = dict(type="FPN", in_channels=self._get_backbone_out_channels(), out_channels=256, num_outs=5)
         else:
@@ -231,7 +231,7 @@ class DetectionTask:
             dim_head=_get_arg(args, "dim_head", 64),
             drop_path_rate=float(_get_arg(args, "drop_path_rate", 0.0)),
             out_indices=tuple(_get_arg(args, "out_indices", (3, 5, 7, 11))),
-            fpn_adapter_style=("simple_fpn" if str(getattr(args, "det_neck_type", "fpn")).lower() == "fpn" else "identity"),
+            fpn_adapter_style=("simple_fpn" if str(_get_arg(args, "det_neck_type", "fpn")).lower() == "fpn" else "identity"),
         )
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)

@@ -167,13 +167,13 @@ class SegmentationTask:
         print("\n✅ MMSeg config summary")
         print(f"   max_iters: {max_iters}")
         print(f"   lr: {args.lr}")
-        print(f"   weight_decay: {getattr(args, 'weight_decay', 0.01)}")
-        print(f"   layer_decay_rate: {getattr(args, 'layer_decay_rate', 1.0)}")
-        print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
+        print(f"   weight_decay: {_get_arg(args, 'weight_decay', 0.01)}")
+        print(f"   layer_decay_rate: {_get_arg(args, 'layer_decay_rate', 1.0)}")
+        print(f"   crop_size: {_get_arg(args, 'crop_size', 512)}")
         print(f"   backbone_image_size: {self._get_backbone_image_size()}")
-        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'SyncBN')}")
+        print(f"   seg_head_dim: {_get_arg(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_aux_dim: {_get_arg(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_norm_type: {_get_arg(args, 'seg_norm_type', 'SyncBN')}")
         print(f"   work_dir: {cfg.work_dir}")
         return cfg
 
@@ -215,7 +215,7 @@ class SegmentationTask:
         norm_cfg = self._get_seg_norm_cfg()
 
         neck_cfg = None
-        seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        seg_neck_style = str(_get_arg(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
             neck_dim = int(_get_arg(self.args, "seg_neck_dim", in_channels[0]))
             neck_cfg = dict(type="MultiLevelNeck", in_channels=in_channels, out_channels=neck_dim, scales=[4, 2, 1, 0.5])
@@ -310,7 +310,7 @@ class SegmentationTask:
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 
     def _get_vit_fpn_adapter_style(self):
-        style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        style = str(_get_arg(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if style in ("internal_resize", "resize"):
             return "resize"
         if style in ("xcit_fpn", "simple_fpn", "official", "official_xcit"):
