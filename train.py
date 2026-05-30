@@ -24,7 +24,19 @@ from utils.cfg import load_cfg
 
 def check_environment(args):
     """Check if current environment is suitable for running the specified task"""
-    import torch
+    try:
+        import torch
+    except ImportError:
+        print("\n" + "=" * 60)
+        print("⚠️  Missing PyTorch dependency")
+        print("=" * 60)
+        print("Segmentation and detection checks require PyTorch.")
+        print("Please install the project dependencies before running training:")
+        print("  pip install -r requirements.txt")
+        print("For full segmentation/detection support, also install mmcv-full")
+        print("matching your CUDA and PyTorch versions.")
+        print("=" * 60 + "\n")
+        sys.exit(1)
     
     task = getattr(args, "task", None)
     if task is None:
