@@ -54,12 +54,11 @@ def check_environment(args):
             print("="*60)
             print(f"Current task: {task_name} ({task})")
             print(f"Current environment: Classification environment (PyTorch {pytorch_version})")
-            print(f"\n{task_name} task requires a dedicated environment!")
-            print("\nPlease run the following commands:")
-            print("  source venv_swin_det/bin/activate")
+            print(f"\n{task_name} task requires an environment with mmcv-full ops.")
+            print("\nPlease create/activate a compatible OpenMMLab environment, then run:")
             print(f"  python train.py --cfg {args.cfg}")
-            print("\nIf you haven't created detection environment yet, run first:")
-            print("  bash INSTALL_DETECTION_NOW.sh")
+            print("\nThis repository includes a setup helper:")
+            print("  bash setup_env.sh <cu118|cu121|cpu>")
             print("="*60 + "\n")
             sys.exit(1)
     else:
@@ -99,22 +98,6 @@ def save_run_snapshot(args):
     with open(snapshot_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     print(f"🧾 Saved run snapshot: {snapshot_path}")
-    # #region agent log
-    debug_payload = {
-        "sessionId": "a67f17",
-        "runId": os.environ.get("DEBUG_RUN_ID", "pre-fix"),
-        "hypothesisId": "H10",
-        "location": "train.py:save_run_snapshot",
-        "message": "Saved run snapshot with resolved args and git status",
-        "data": {"snapshot_path": snapshot_path, "run_tag": run_tag},
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open("/home3/dnrx52/SCOPE/.cursor/debug-a67f17.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps(debug_payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
 
 
 def main():
