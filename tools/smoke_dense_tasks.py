@@ -141,12 +141,13 @@ def check_detection(model_name, size, dim, depth, heads):
     from mmdet.models import build_detector
     from tasks.detection import DetectionTask
 
+    arg_values = _base_args("det", model_name, size, dim, depth, heads)
+    arg_values.update(weight_decay=0.05)
     args = Namespace(
-        **_base_args("det", model_name, size, dim, depth, heads),
+        **arg_values,
         det_neck_type="fpn",
         img_scale=(size, size),
         n_epochs=1,
-        weight_decay=0.05,
         betas=(0.9, 0.999),
     )
     task = DetectionTask.__new__(DetectionTask)
