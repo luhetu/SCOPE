@@ -10,10 +10,16 @@ launching the full CUDA training entrypoint.
 
 import argparse
 from argparse import Namespace
+from pathlib import Path
+import sys
 import warnings
 
 import numpy as np
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
