@@ -51,6 +51,11 @@ def _as_pair(value, default):
     return (int(value), int(value))
 
 
+def _arg(args, name, default):
+    value = getattr(args, name, default)
+    return default if value is None else value
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -61,10 +66,10 @@ class SegmentationTask:
         print(f"   model: {args.model}")
         print(f"   pretrained: {getattr(args, 'pretrained', 'NOT SET')}")
 
-        self.use_wandb = WANDB_AVAILABLE and not getattr(args, "nowandb", False)
+        self.use_wandb = WANDB_AVAILABLE and not _arg(args, "nowandb", False)
         self.cfg = self._build_mmseg_config()
 
-        if getattr(args, "seed", None) is not None:
+        if _arg(args, "seed", None) is not None:
             set_random_seed(args.seed, deterministic=True)
 
         self.model = build_segmentor(
@@ -86,7 +91,7 @@ class SegmentationTask:
             name = f"{self.run_name}_size{args.size}_patch{args.patch}_dim{getattr(args, 'dim', 'na')}_bs{args.bs}_lr{args.lr}"
             wandb.init(project="ade20k-experiments", name=name)
             wandb.config.update(vars(args))
-        elif not WANDB_AVAILABLE and not getattr(args, "nowandb", False):
+        elif not WANDB_AVAILABLE and not _arg(args, "nowandb", False):
             print("WARNING: WandB not installed, skipping WandB logging.")
 
     def _build_run_name(self):
@@ -106,22 +111,22 @@ class SegmentationTask:
         cfg.optimizer = dict(
             type="AdamW",
             lr=args.lr,
-            betas=_as_betas(getattr(args, "betas", None)),
-            weight_decay=getattr(args, "weight_decay", 0.01),
+            betas=_as_betas(_arg(args, "betas", None)),
+            weight_decay=_arg(args, "weight_decay", 0.01),
             paramwise_cfg=self._get_paramwise_cfg(),
         )
         cfg.optimizer_config = dict(grad_clip=None)
 
-        if bool(getattr(args, "amp", False)):
+        if bool(_arg(args, "amp", False)):
             cfg.fp16 = dict(loss_scale="dynamic")
             print("✅ MMSeg fp16 enabled: cfg.fp16 = dynamic loss scale")
 
-        max_iters = getattr(args, "max_iters", None)
+        max_iters = _arg(args, "max_iters", None)
         if max_iters is None:
-            max_iters = int(getattr(args, "n_epochs", 32) * 1000)
-        warmup_iters = getattr(args, "warmup_iters", None)
+            max_iters = int(_arg(args, "n_epochs", 32) * 1000)
+        warmup_iters = _arg(args, "warmup_iters", None)
         if warmup_iters is None:
-            warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
+            warmup_iters = int(_arg(args, "warmup_epochs", 0) * 1000)
 
         cfg.runner = dict(type="IterBasedRunner", max_iters=max_iters)
         cfg.lr_config = dict(
@@ -130,25 +135,25 @@ class SegmentationTask:
             warmup_iters=warmup_iters,
             warmup_ratio=1e-6,
             power=1.0,
-            min_lr=getattr(args, "min_lr", 0.0),
+            min_lr=_arg(args, "min_lr", 0.0),
             by_epoch=False,
         )
         cfg.checkpoint_config = dict(
             by_epoch=False,
-            interval=int(getattr(args, "checkpoint_interval", 5000)),
+            interval=int(_arg(args, "checkpoint_interval", 5000)),
             filename_tmpl=f"{self.run_name}_{args.task or 'seg'}_iter_{{}}.pth",
             max_keep_ckpts=3,
         )
 
-        log_interval = int(getattr(args, "log_interval", 100))
-        eval_interval = int(getattr(args, "eval_interval", 2001))
+        log_interval = int(_arg(args, "log_interval", 100))
+        eval_interval = int(_arg(args, "eval_interval", 2001))
         if eval_interval % log_interval == 0:
             eval_interval += 1
         cfg.evaluation = dict(interval=eval_interval, metric="mIoU", pre_eval=True, save_best="mIoU", classwise=False)
         cfg.log_config = dict(interval=log_interval, hooks=[dict(type="TextLoggerHook", by_epoch=False)])
 
         cfg.custom_hooks = []
-        cfg.final_eval = bool(getattr(args, "final_eval", True))
+        cfg.final_eval = bool(_arg(args, "final_eval", True))
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
         cfg.work_dir = f"./work_dirs/{self.run_name}_upernet"
@@ -157,24 +162,24 @@ class SegmentationTask:
         cfg.workflow = [("train", 1)]
         cfg.gpu_ids = [0]
         cfg.cudnn_benchmark = True
-        cfg.seed = getattr(args, "seed", None)
+        cfg.seed = _arg(args, "seed", None)
 
         print("\n✅ MMSeg config summary")
         print(f"   max_iters: {max_iters}")
         print(f"   lr: {args.lr}")
-        print(f"   weight_decay: {getattr(args, 'weight_decay', 0.01)}")
-        print(f"   layer_decay_rate: {getattr(args, 'layer_decay_rate', 1.0)}")
-        print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
+        print(f"   weight_decay: {_arg(args, 'weight_decay', 0.01)}")
+        print(f"   layer_decay_rate: {_arg(args, 'layer_decay_rate', 1.0)}")
+        print(f"   crop_size: {_arg(args, 'crop_size', 512)}")
         print(f"   backbone_image_size: {self._get_backbone_image_size()}")
-        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'SyncBN')}")
+        print(f"   seg_head_dim: {_arg(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_aux_dim: {_arg(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_norm_type: {_arg(args, 'seg_norm_type', 'SyncBN')}")
         print(f"   work_dir: {cfg.work_dir}")
         return cfg
 
     def _get_paramwise_cfg(self):
         args = self.args
-        layer_decay_rate = float(getattr(args, "layer_decay_rate", 1.0))
+        layer_decay_rate = float(_arg(args, "layer_decay_rate", 1.0))
         custom_keys = {
             "backbone.pos_embedding": dict(decay_mult=0.0),
             "cope.pos_emb": dict(decay_mult=0.0),
@@ -184,7 +189,7 @@ class SegmentationTask:
             "norm": dict(decay_mult=0.0),
         }
         if args.model != "swin" and layer_decay_rate < 1.0:
-            depth = int(getattr(args, "depth", 12))
+            depth = int(_arg(args, "depth", 12))
             embed_lr_mult = layer_decay_rate ** depth
             custom_keys.update({
                 "backbone.to_patch_embedding": dict(lr_mult=embed_lr_mult),
@@ -204,15 +209,15 @@ class SegmentationTask:
 
     def _get_upernet_config(self):
         in_channels = self._get_backbone_out_channels()
-        head_dim = int(getattr(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
-        aux_dim = int(getattr(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
-        aux_idx = int(getattr(self.args, "seg_aux_in_index", 2))
+        head_dim = int(_arg(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
+        aux_dim = int(_arg(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
+        aux_idx = int(_arg(self.args, "seg_aux_in_index", 2))
         norm_cfg = self._get_seg_norm_cfg()
 
         neck_cfg = None
-        seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        seg_neck_style = str(_arg(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
-            neck_dim = int(getattr(self.args, "seg_neck_dim", in_channels[0]))
+            neck_dim = int(_arg(self.args, "seg_neck_dim", in_channels[0]))
             neck_cfg = dict(type="MultiLevelNeck", in_channels=in_channels, out_channels=neck_dim, scales=[4, 2, 1, 0.5])
             in_channels = [neck_dim] * 4
 
@@ -252,16 +257,16 @@ class SegmentationTask:
 
     def _get_default_seg_head_dim(self):
         # Scratching ViT protocol: Ti/S/B use head dims 192/384/512 respectively.
-        return int(getattr(self.args, "dim", 512))
+        return int(_arg(self.args, "dim", 512))
 
     def _get_seg_norm_cfg(self):
-        norm_type = str(getattr(self.args, "seg_norm_type", "SyncBN"))
+        norm_type = str(_arg(self.args, "seg_norm_type", "SyncBN"))
         if norm_type.upper() == "GN":
             return dict(type="GN", num_groups=32, requires_grad=True)
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        value = _arg(self.args, "backbone_size", _arg(self.args, "crop_size", self.args.size))
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
@@ -278,7 +283,7 @@ class SegmentationTask:
                 qk_scale=None,
                 drop_rate=0.0,
                 attn_drop_rate=0.0,
-                drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+                drop_path_rate=float(_arg(args, "drop_path_rate", 0.0)),
                 ape=False,
                 patch_norm=True,
                 out_indices=(0, 1, 2, 3),
@@ -291,21 +296,21 @@ class SegmentationTask:
             depth=args.depth,
             heads=args.heads,
             mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
-            out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
+            dim_head=_arg(args, "dim_head", 64),
+            drop_path_rate=float(_arg(args, "drop_path_rate", 0.0)),
+            out_indices=tuple(_arg(args, "out_indices", (3, 5, 7, 11))),
             fpn_adapter_style=self._get_vit_fpn_adapter_style(),
         )
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
-            return dict(type="ViTCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", False)), **common)
+            return dict(type="ViTCoPEBackbone", use_cls_token=bool(_arg(args, "use_cls_token", False)), **common)
         if args.model == "vitscope":
-            return dict(type="ViTSCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", True)), **common)
+            return dict(type="ViTSCoPEBackbone", use_cls_token=bool(_arg(args, "use_cls_token", True)), **common)
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 
     def _get_vit_fpn_adapter_style(self):
-        style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        style = str(_arg(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if style in ("internal_resize", "resize"):
             return "resize"
         if style in ("xcit_fpn", "simple_fpn", "official", "official_xcit"):
@@ -320,9 +325,9 @@ class SegmentationTask:
     def _get_data_config(self):
         args = self.args
         img_norm_cfg = dict(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
-        crop_size = _as_pair(getattr(args, "crop_size", None), 512)
-        img_scale = _as_pair(getattr(args, "img_scale", None), (2048, 512))
-        test_img_scale = _as_pair(getattr(args, "test_img_scale", None), img_scale)
+        crop_size = _as_pair(_arg(args, "crop_size", None), 512)
+        img_scale = _as_pair(_arg(args, "img_scale", None), (2048, 512))
+        test_img_scale = _as_pair(_arg(args, "test_img_scale", None), img_scale)
 
         train_pipeline = [
             dict(type="LoadImageFromFile"),
@@ -354,7 +359,7 @@ class SegmentationTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(_arg(args, "workers_per_gpu", 4)),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
@@ -372,7 +377,7 @@ class SegmentationTask:
 
     def _map_pretrained_key(self, key):
         raw_key = key[len("backbone."):] if key.startswith("backbone.") else key
-        last_norm_idx = len(getattr(self.args, "out_indices", (3, 5, 7, 11))) - 1
+        last_norm_idx = len(_arg(self.args, "out_indices", (3, 5, 7, 11))) - 1
         if raw_key in ("mlp_head.0.weight", "mlp_head.0.bias"):
             return f"backbone.norms.{last_norm_idx}.{raw_key.rsplit('.', 1)[1]}", "final_norm"
         if raw_key in ("norm.weight", "norm.bias"):
@@ -434,7 +439,7 @@ class SegmentationTask:
         self.model.load_state_dict(model_dict, strict=False)
         rate = 100.0 * len(matched) / max(1, len(backbone_dict))
         print(f"\n✅ FINAL: Loaded {len(matched)}/{len(backbone_dict)} backbone keys ({rate:.1f}%)")
-        if rate < float(getattr(self.args, "min_pretrained_match_rate", 80.0)):
+        if rate < float(_arg(self.args, "min_pretrained_match_rate", 80.0)):
             raise RuntimeError(f"Pretrained backbone match rate {rate:.1f}% is too low")
         print(f"{'=' * 60}\n")
 
