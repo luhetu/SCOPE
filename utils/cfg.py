@@ -18,6 +18,9 @@ def load_cfg(parser):
         
         # 将 YAML Configuration直接Setup到 args 对象，确保类型正确
         for key, value in cfg.items():
+            if value is None:
+                setattr(args, key, None)
+                continue
             # 确保数值类型参数被正确Convert
             if key in ['lr', 'min_lr']:
                 value = float(value)
