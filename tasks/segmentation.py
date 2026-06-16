@@ -323,6 +323,9 @@ class SegmentationTask:
         crop_size = _as_pair(getattr(args, "crop_size", None), 512)
         img_scale = _as_pair(getattr(args, "img_scale", None), (2048, 512))
         test_img_scale = _as_pair(getattr(args, "test_img_scale", None), img_scale)
+        workers_per_gpu = getattr(args, "workers_per_gpu", None)
+        if workers_per_gpu is None:
+            workers_per_gpu = 4
 
         train_pipeline = [
             dict(type="LoadImageFromFile"),
@@ -354,7 +357,7 @@ class SegmentationTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(workers_per_gpu),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
