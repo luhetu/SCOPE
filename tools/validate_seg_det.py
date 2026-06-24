@@ -145,7 +145,7 @@ def _validate_config_builders():
         else:
             raise AssertionError(f"Unexpected task in {cfg_path}: {args.task}")
 
-        if cfg.data.workers_per_gpu != 4:
+        if cfg.data["workers_per_gpu"] != 4:
             raise AssertionError(f"{cfg_path}: expected workers_per_gpu default 4")
         if not cfg.model.get("backbone"):
             raise AssertionError(f"{cfg_path}: missing model.backbone config")
