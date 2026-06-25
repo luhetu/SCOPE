@@ -11,6 +11,7 @@ det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 
 # Swin Transformer configuration (aligned with mask_rcnn_swin-t-p4-w7_fpn_1x_coco)
 patch: 4
+size: 224
 embed_dim: 96
 depths: [2, 2, 6, 2]
 num_heads: [3, 6, 12, 24]
