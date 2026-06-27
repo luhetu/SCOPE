@@ -10,6 +10,7 @@ pretrained: ./checkpoint/swin_custom_pretrain.pth  # Use custom pre-trained weig
 det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
 
 # Swin Transformer configuration (aligned with mask_rcnn_swin-t-p4-w7_fpn_1x_coco)
+size: 224  # Used by shared logging/snapshot paths; Swin detection uses img_scale for data.
 patch: 4
 embed_dim: 96
 depths: [2, 2, 6, 2]

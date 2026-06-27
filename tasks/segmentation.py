@@ -51,6 +51,15 @@ def _as_pair(value, default):
     return (int(value), int(value))
 
 
+def _workers_per_gpu(args, default=4):
+    value = getattr(args, "workers_per_gpu", None)
+    return default if value is None else int(value)
+
+
+def _optional_int(value, default):
+    return int(default if value is None else value)
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -204,8 +213,8 @@ class SegmentationTask:
 
     def _get_upernet_config(self):
         in_channels = self._get_backbone_out_channels()
-        head_dim = int(getattr(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
-        aux_dim = int(getattr(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
+        head_dim = _optional_int(getattr(self.args, "seg_head_dim", None), self._get_default_seg_head_dim())
+        aux_dim = _optional_int(getattr(self.args, "seg_aux_dim", None), self._get_default_seg_head_dim())
         aux_idx = int(getattr(self.args, "seg_aux_in_index", 2))
         norm_cfg = self._get_seg_norm_cfg()
 
@@ -261,7 +270,11 @@ class SegmentationTask:
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        value = getattr(self.args, "backbone_size", None)
+        if value is None:
+            value = getattr(self.args, "crop_size", None)
+        if value is None:
+            value = self.args.size
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
@@ -354,7 +367,7 @@ class SegmentationTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=_workers_per_gpu(args),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
