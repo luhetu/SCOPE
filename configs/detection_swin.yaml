@@ -5,6 +5,7 @@ model: swin
 # Data configuration
 data_dir: /home3/dnrx52/SCOPE/datasets/coco
 bs: 2  # Two images per GPU, aligned with official 1x (total batch 16), then scale LR proportionally
+size: 224
 img_scale: [1333, 800]  # COCO 1x training standard size (short side 800)
 pretrained: ./checkpoint/swin_custom_pretrain.pth  # Use custom pre-trained weights
 det_neck_type: fpn  # Paper-style Mask R-CNN + FPN
