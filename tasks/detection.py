@@ -138,7 +138,7 @@ class DetectionTask:
         cfg.runner = dict(type="EpochBasedRunner", max_epochs=args.n_epochs)
         cfg.checkpoint_config = dict(interval=1, filename_tmpl=f"{self.run_name}_{args.task or 'det'}_epoch_{{}}.pth", max_keep_ckpts=3)
         cfg.evaluation = dict(interval=1, metric=["bbox", "segm"], save_best="bbox_mAP", classwise=False)
-        cfg.log_config = dict(interval=int(getattr(args, "log_interval", 50)), hooks=[dict(type="TextLoggerHook")])
+        cfg.log_config = dict(interval=_as_int(getattr(args, "log_interval", None), 50), hooks=[dict(type="TextLoggerHook")])
         cfg.custom_hooks = [dict(type="NumClassCheckHook")]
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
