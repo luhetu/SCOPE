@@ -51,6 +51,12 @@ def _as_scale(value, default=(1333, 800)):
     return (v, v)
 
 
+def _as_int(value, default):
+    if value is None:
+        value = default
+    return int(value)
+
+
 class DetectionTask:
     def __init__(self, args):
         self.args = args
@@ -132,7 +138,7 @@ class DetectionTask:
         cfg.runner = dict(type="EpochBasedRunner", max_epochs=args.n_epochs)
         cfg.checkpoint_config = dict(interval=1, filename_tmpl=f"{self.run_name}_{args.task or 'det'}_epoch_{{}}.pth", max_keep_ckpts=3)
         cfg.evaluation = dict(interval=1, metric=["bbox", "segm"], save_best="bbox_mAP", classwise=False)
-        cfg.log_config = dict(interval=int(getattr(args, "log_interval", 50)), hooks=[dict(type="TextLoggerHook")])
+        cfg.log_config = dict(interval=_as_int(getattr(args, "log_interval", None), 50), hooks=[dict(type="TextLoggerHook")])
         cfg.custom_hooks = [dict(type="NumClassCheckHook")]
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
@@ -214,6 +220,8 @@ class DetectionTask:
 
     def _get_backbone_config(self):
         args = self.args
+        if args.model == "swin":
+            return dict(type="SwinTransformer", embed_dim=args.embed_dim, depths=args.depths, num_heads=args.num_heads, window_size=args.window_size, mlp_ratio=4.0, qkv_bias=True, qk_scale=None, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)), ape=False, patch_norm=True, out_indices=(0, 1, 2, 3), use_checkpoint=False)
         common = dict(
             image_size=args.size,
             patch_size=args.patch,
@@ -226,8 +234,6 @@ class DetectionTask:
             out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
             fpn_adapter_style=("simple_fpn" if str(getattr(args, "det_neck_type", "fpn")).lower() == "fpn" else "identity"),
         )
-        if args.model == "swin":
-            return dict(type="SwinTransformer", embed_dim=args.embed_dim, depths=args.depths, num_heads=args.num_heads, window_size=args.window_size, mlp_ratio=4.0, qkv_bias=True, qk_scale=None, drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)), ape=False, patch_norm=True, out_indices=(0, 1, 2, 3), use_checkpoint=False)
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
@@ -279,7 +285,7 @@ class DetectionTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=_as_int(getattr(args, "workers_per_gpu", None), 4),
             train=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_train2017.json", img_prefix=f"{args.data_dir}/train2017/", pipeline=train_pipeline),
             val=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
             test=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
