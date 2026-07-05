@@ -163,6 +163,8 @@ class SegmentationTask:
         cfg.cudnn_benchmark = True
         cfg.seed = getattr(args, "seed", None)
 
+        resolved_seg_head_dim = _as_int(getattr(args, "seg_head_dim", None), self._get_default_seg_head_dim())
+        resolved_seg_aux_dim = _as_int(getattr(args, "seg_aux_dim", None), self._get_default_seg_head_dim())
         print("\n✅ MMSeg config summary")
         print(f"   max_iters: {max_iters}")
         print(f"   lr: {args.lr}")
@@ -170,8 +172,8 @@ class SegmentationTask:
         print(f"   layer_decay_rate: {getattr(args, 'layer_decay_rate', 1.0)}")
         print(f"   crop_size: {getattr(args, 'crop_size', 512)}")
         print(f"   backbone_image_size: {self._get_backbone_image_size()}")
-        print(f"   seg_head_dim: {getattr(args, 'seg_head_dim', self._get_default_seg_head_dim())}")
-        print(f"   seg_aux_dim: {getattr(args, 'seg_aux_dim', self._get_default_seg_head_dim())}")
+        print(f"   seg_head_dim: {resolved_seg_head_dim}")
+        print(f"   seg_aux_dim: {resolved_seg_aux_dim}")
         print(f"   seg_norm_type: {getattr(args, 'seg_norm_type', 'SyncBN')}")
         print(f"   work_dir: {cfg.work_dir}")
         return cfg
