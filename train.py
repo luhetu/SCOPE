@@ -117,6 +117,11 @@ def save_run_snapshot(args):
     # #endregion
 
 
+def _arg_or_default(args, name, default):
+    value = getattr(args, name, None)
+    return default if value is None else value
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified ViT/CoPE/SCoPE Trainer")
     parser.add_argument("--cfg", type=str, default="", help="YAML config path")
@@ -155,10 +160,12 @@ def main():
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
-            args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
-            args.warmup_iters = 1500  # Default warmup
+            warmup_epochs = _arg_or_default(args, 'warmup_epochs', 0)
+            if warmup_epochs > 0:
+                args.warmup_iters = int(warmup_epochs * iters_per_epoch)
+            else:
+                args.warmup_iters = 1500  # Default warmup
         
         # Save iters_per_epoch for later use
         args.iters_per_epoch = iters_per_epoch
@@ -188,10 +195,12 @@ def main():
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
-            args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
-            args.warmup_iters = 500  # Default warmup
+            warmup_epochs = _arg_or_default(args, 'warmup_epochs', 0)
+            if warmup_epochs > 0:
+                args.warmup_iters = int(warmup_epochs * iters_per_epoch)
+            else:
+                args.warmup_iters = 500  # Default warmup
         
         print(f"\n{'='*60}")
         print(f"🔧 Epoch-based configuration (detection)")
@@ -211,8 +220,8 @@ def main():
     print(f"{'='*60}")
     print(f"  Task type: {args.task}")
     print(f"  Model: {args.model}")
-    print(f"  Image size: {args.size}")
-    print(f"  Patch size: {args.patch}")
+    print(f"  Image size: {_arg_or_default(args, 'size', 'n/a')}")
+    print(f"  Patch size: {_arg_or_default(args, 'patch', 'n/a')}")
     
     # Print different architecture parameters based on model type
     if args.model == 'swin':
