@@ -153,10 +153,11 @@ def main():
             approx_epochs = float(args.n_epochs)
         
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
+        warmup_epochs = getattr(args, 'warmup_epochs', None)
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
-            args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
+        elif warmup_epochs is not None and warmup_epochs > 0:
+            args.warmup_iters = int(warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 1500  # Default warmup
         
@@ -175,8 +176,8 @@ def main():
         else:
             print(f"  Configured epochs: {args.n_epochs}")
         print(f"  ➜ max_iters: {args.max_iters:,}")
-        if hasattr(args, 'warmup_epochs'):
-            print(f"  Warmup epochs: {args.warmup_epochs}")
+        if warmup_epochs is not None:
+            print(f"  Warmup epochs: {warmup_epochs}")
         print(f"  ➜ warmup_iters: {args.warmup_iters}")
         print(f"{'='*60}\n")
     elif args.task == 'det':
@@ -186,10 +187,11 @@ def main():
         iters_per_epoch = num_images // args.bs
         
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
+        warmup_epochs = getattr(args, 'warmup_epochs', None)
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
-            args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
+        elif warmup_epochs is not None and warmup_epochs > 0:
+            args.warmup_iters = int(warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 500  # Default warmup
         
@@ -200,8 +202,8 @@ def main():
         print(f"  Batch Size: {args.bs}")
         print(f"  Iterations per epoch: {iters_per_epoch:,}")
         print(f"  Total epochs: {args.n_epochs}")
-        if hasattr(args, 'warmup_epochs'):
-            print(f"  Warmup epochs: {args.warmup_epochs}")
+        if warmup_epochs is not None:
+            print(f"  Warmup epochs: {warmup_epochs}")
         print(f"  ➜ warmup_iters: {args.warmup_iters}")
         print(f"{'='*60}\n")
 
@@ -211,8 +213,8 @@ def main():
     print(f"{'='*60}")
     print(f"  Task type: {args.task}")
     print(f"  Model: {args.model}")
-    print(f"  Image size: {args.size}")
-    print(f"  Patch size: {args.patch}")
+    print(f"  Image size: {getattr(args, 'size', 'n/a')}")
+    print(f"  Patch size: {getattr(args, 'patch', 'n/a')}")
     
     # Print different architecture parameters based on model type
     if args.model == 'swin':
