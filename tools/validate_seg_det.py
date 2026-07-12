@@ -63,7 +63,10 @@ def argv(args: Iterable[str]):
 
 
 def _has_module(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def _install_stubs(use_dummy_backbones: bool) -> None:
