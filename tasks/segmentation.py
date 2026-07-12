@@ -36,14 +36,48 @@ except ImportError:
 
 
 def _as_betas(value, default=(0.9, 0.999)):
+    if _is_null_like(value):
+        return default
     if isinstance(value, (list, tuple)) and len(value) == 2:
         return tuple(float(v) for v in value)
     return default
 
 
+def _is_null_like(value):
+    return value is None or (isinstance(value, str) and value.strip().lower() in {"", "none", "null"})
+
+
+def _value_or(value, default):
+    return default if _is_null_like(value) else value
+
+
+def _as_bool(value, default=False):
+    value = _value_or(value, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
+def _as_int(value, default):
+    return int(_value_or(value, default))
+
+
+def _as_float(value, default):
+    return float(_value_or(value, default))
+
+
+def _as_string(value, default):
+    return str(_value_or(value, default))
+
+
 def _as_pair(value, default):
-    if value is None:
-        value = default
+    value = _value_or(value, default)
     if isinstance(value, (tuple, list)):
         if len(value) != 2:
             raise ValueError(f"Expected pair value, got {value}")
@@ -112,16 +146,20 @@ class SegmentationTask:
         )
         cfg.optimizer_config = dict(grad_clip=None)
 
-        if bool(getattr(args, "amp", False)):
+        if _as_bool(getattr(args, "amp", False)):
             cfg.fp16 = dict(loss_scale="dynamic")
             print("✅ MMSeg fp16 enabled: cfg.fp16 = dynamic loss scale")
 
         max_iters = getattr(args, "max_iters", None)
         if max_iters is None:
-            max_iters = int(getattr(args, "n_epochs", 32) * 1000)
+            max_iters = _as_int(getattr(args, "n_epochs", 32), 32) * 1000
+        else:
+            max_iters = int(max_iters)
         warmup_iters = getattr(args, "warmup_iters", None)
         if warmup_iters is None:
-            warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
+            warmup_iters = int(_as_float(getattr(args, "warmup_epochs", 0), 0) * 1000)
+        else:
+            warmup_iters = int(warmup_iters)
 
         cfg.runner = dict(type="IterBasedRunner", max_iters=max_iters)
         cfg.lr_config = dict(
@@ -135,20 +173,20 @@ class SegmentationTask:
         )
         cfg.checkpoint_config = dict(
             by_epoch=False,
-            interval=int(getattr(args, "checkpoint_interval", 5000)),
+            interval=_as_int(getattr(args, "checkpoint_interval", 5000), 5000),
             filename_tmpl=f"{self.run_name}_{args.task or 'seg'}_iter_{{}}.pth",
             max_keep_ckpts=3,
         )
 
-        log_interval = int(getattr(args, "log_interval", 100))
-        eval_interval = int(getattr(args, "eval_interval", 2001))
+        log_interval = _as_int(getattr(args, "log_interval", 100), 100)
+        eval_interval = _as_int(getattr(args, "eval_interval", 2001), 2001)
         if eval_interval % log_interval == 0:
             eval_interval += 1
         cfg.evaluation = dict(interval=eval_interval, metric="mIoU", pre_eval=True, save_best="mIoU", classwise=False)
         cfg.log_config = dict(interval=log_interval, hooks=[dict(type="TextLoggerHook", by_epoch=False)])
 
         cfg.custom_hooks = []
-        cfg.final_eval = bool(getattr(args, "final_eval", True))
+        cfg.final_eval = _as_bool(getattr(args, "final_eval", True), True)
         cfg.dist_params = dict(backend="nccl")
         cfg.log_level = "INFO"
         cfg.work_dir = f"./work_dirs/{self.run_name}_upernet"
@@ -174,7 +212,7 @@ class SegmentationTask:
 
     def _get_paramwise_cfg(self):
         args = self.args
-        layer_decay_rate = float(getattr(args, "layer_decay_rate", 1.0))
+        layer_decay_rate = _as_float(getattr(args, "layer_decay_rate", 1.0), 1.0)
         custom_keys = {
             "backbone.pos_embedding": dict(decay_mult=0.0),
             "cope.pos_emb": dict(decay_mult=0.0),
@@ -184,7 +222,7 @@ class SegmentationTask:
             "norm": dict(decay_mult=0.0),
         }
         if args.model != "swin" and layer_decay_rate < 1.0:
-            depth = int(getattr(args, "depth", 12))
+            depth = _as_int(getattr(args, "depth", 12), 12)
             embed_lr_mult = layer_decay_rate ** depth
             custom_keys.update({
                 "backbone.to_patch_embedding": dict(lr_mult=embed_lr_mult),
@@ -204,15 +242,15 @@ class SegmentationTask:
 
     def _get_upernet_config(self):
         in_channels = self._get_backbone_out_channels()
-        head_dim = int(getattr(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
-        aux_dim = int(getattr(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
-        aux_idx = int(getattr(self.args, "seg_aux_in_index", 2))
+        head_dim = _as_int(getattr(self.args, "seg_head_dim", None), self._get_default_seg_head_dim())
+        aux_dim = _as_int(getattr(self.args, "seg_aux_dim", None), self._get_default_seg_head_dim())
+        aux_idx = _as_int(getattr(self.args, "seg_aux_in_index", 2), 2)
         norm_cfg = self._get_seg_norm_cfg()
 
         neck_cfg = None
-        seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        seg_neck_style = _as_string(getattr(self.args, "seg_neck_style", "xcit_fpn"), "xcit_fpn").lower()
         if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
-            neck_dim = int(getattr(self.args, "seg_neck_dim", in_channels[0]))
+            neck_dim = _as_int(getattr(self.args, "seg_neck_dim", None), in_channels[0])
             neck_cfg = dict(type="MultiLevelNeck", in_channels=in_channels, out_channels=neck_dim, scales=[4, 2, 1, 0.5])
             in_channels = [neck_dim] * 4
 
@@ -252,16 +290,16 @@ class SegmentationTask:
 
     def _get_default_seg_head_dim(self):
         # Scratching ViT protocol: Ti/S/B use head dims 192/384/512 respectively.
-        return int(getattr(self.args, "dim", 512))
+        return _as_int(getattr(self.args, "dim", 512), 512)
 
     def _get_seg_norm_cfg(self):
-        norm_type = str(getattr(self.args, "seg_norm_type", "SyncBN"))
+        norm_type = _as_string(getattr(self.args, "seg_norm_type", "SyncBN"), "SyncBN")
         if norm_type.upper() == "GN":
             return dict(type="GN", num_groups=32, requires_grad=True)
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        value = _value_or(getattr(self.args, "backbone_size", None), _value_or(getattr(self.args, "crop_size", None), self.args.size))
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
@@ -278,7 +316,7 @@ class SegmentationTask:
                 qk_scale=None,
                 drop_rate=0.0,
                 attn_drop_rate=0.0,
-                drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+                drop_path_rate=_as_float(getattr(args, "drop_path_rate", 0.0), 0.0),
                 ape=False,
                 patch_norm=True,
                 out_indices=(0, 1, 2, 3),
@@ -291,21 +329,21 @@ class SegmentationTask:
             depth=args.depth,
             heads=args.heads,
             mlp_dim=args.mlp_dim,
-            dim_head=getattr(args, "dim_head", 64),
-            drop_path_rate=float(getattr(args, "drop_path_rate", 0.0)),
+            dim_head=_as_int(getattr(args, "dim_head", 64), 64),
+            drop_path_rate=_as_float(getattr(args, "drop_path_rate", 0.0), 0.0),
             out_indices=tuple(getattr(args, "out_indices", (3, 5, 7, 11))),
             fpn_adapter_style=self._get_vit_fpn_adapter_style(),
         )
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
-            return dict(type="ViTCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", False)), **common)
+            return dict(type="ViTCoPEBackbone", use_cls_token=_as_bool(getattr(args, "use_cls_token", False), False), **common)
         if args.model == "vitscope":
-            return dict(type="ViTSCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", True)), **common)
+            return dict(type="ViTSCoPEBackbone", use_cls_token=_as_bool(getattr(args, "use_cls_token", True), True), **common)
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 
     def _get_vit_fpn_adapter_style(self):
-        style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
+        style = _as_string(getattr(self.args, "seg_neck_style", "xcit_fpn"), "xcit_fpn").lower()
         if style in ("internal_resize", "resize"):
             return "resize"
         if style in ("xcit_fpn", "simple_fpn", "official", "official_xcit"):
@@ -315,7 +353,7 @@ class SegmentationTask:
     def _get_backbone_out_channels(self):
         if self.args.model == "swin":
             return [self.args.embed_dim * (2 ** i) for i in range(4)]
-        return [self.args.dim] * 4
+        return [_as_int(getattr(self.args, "dim", 512), 512)] * 4
 
     def _get_data_config(self):
         args = self.args
@@ -353,8 +391,8 @@ class SegmentationTask:
             ),
         ]
         return dict(
-            samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            samples_per_gpu=_as_int(args.bs, 1),
+            workers_per_gpu=_as_int(getattr(args, "workers_per_gpu", None), 4),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
