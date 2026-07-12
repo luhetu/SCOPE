@@ -67,6 +67,21 @@ def _has_module(name: str) -> bool:
 
 
 def _install_stubs(use_dummy_backbones: bool) -> None:
+    if use_dummy_backbones and not _has_module("torch"):
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+        torch.load = lambda *args, **kwargs: {}
+        torch.no_grad = lambda: redirect_stdout(StringIO())
+
+        torch_nn = types.ModuleType("torch.nn")
+        torch_nn_functional = types.ModuleType("torch.nn.functional")
+        torch_nn.functional = torch_nn_functional
+        torch.nn = torch_nn
+
+        sys.modules["torch"] = torch
+        sys.modules["torch.nn"] = torch_nn
+        sys.modules["torch.nn.functional"] = torch_nn_functional
+
     mmcv = types.ModuleType("mmcv")
     mmcv.Config = Config
     sys.modules["mmcv"] = mmcv
