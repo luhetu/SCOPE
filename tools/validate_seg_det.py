@@ -129,6 +129,18 @@ def _install_backbone_stub() -> None:
     sys.modules["models.vit_backbone"] = module
 
 
+def _install_torch_stub() -> None:
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    torch_nn = types.ModuleType("torch.nn")
+    torch_nn_functional = types.ModuleType("torch.nn.functional")
+    torch_nn_functional.interpolate = _noop
+    torch.nn = torch_nn
+    sys.modules["torch"] = torch
+    sys.modules["torch.nn"] = torch_nn
+    sys.modules["torch.nn.functional"] = torch_nn_functional
+
+
 def _is_null_like(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip().lower() in {"", "null", "none"})
 
@@ -345,6 +357,8 @@ def main() -> int:
     has_backbone_deps, missing = _has_torch_backbone_deps()
     _install_openmmlab_stubs()
     if not has_backbone_deps:
+        if "torch" in missing:
+            _install_torch_stub()
         _install_backbone_stub()
 
     seg_count = _validate_segmentation(seg_paths)
