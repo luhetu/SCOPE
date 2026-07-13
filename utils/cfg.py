@@ -2,6 +2,22 @@ import yaml
 import os
 
 
+def _is_null_like(value):
+    return value is None or (isinstance(value, str) and value.strip().lower() in {"", "null", "none"})
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
 def load_cfg(parser):
     """
     ⚙️ Load YAML Configuration文件并合并到 args
@@ -14,12 +30,18 @@ def load_cfg(parser):
     if args.cfg and os.path.isfile(args.cfg):
         print(f"✅ [cfg] LoadConfiguration文件：{args.cfg}")
         with open(args.cfg, "r", encoding='utf-8') as f:
-            cfg = yaml.safe_load(f)
+            cfg = yaml.safe_load(f) or {}
+        if not isinstance(cfg, dict):
+            raise ValueError(f"YAML config must be a mapping, got {type(cfg).__name__}: {args.cfg}")
         
         # 将 YAML Configuration直接Setup到 args 对象，确保类型正确
         for key, value in cfg.items():
+            if _is_null_like(value):
+                value = None
             # 确保数值类型参数被正确Convert
-            if key in ['lr', 'min_lr']:
+            if value is None:
+                pass
+            elif key in ['lr', 'min_lr']:
                 value = float(value)
             elif key in [
                 'bs', 'size', 'n_epochs', 'max_iters', 'warmup_iters',
@@ -34,9 +56,7 @@ def load_cfg(parser):
             ]:
                 value = float(value)
             elif key in ['amp', 'aug', 'nowandb', 'use_cls_token']:
-                value = bool(value)
-            elif key in ['pretrained'] and value == 'null':
-                value = None
+                value = _as_bool(value)
             setattr(args, key, value)
         
         print(f"✅ [cfg] SuccessLoad {len(cfg)} 个参数")
