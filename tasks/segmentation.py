@@ -277,7 +277,10 @@ class SegmentationTask:
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        value = _value_or_default(
+            getattr(self.args, "backbone_size", None),
+            _value_or_default(getattr(self.args, "crop_size", None), self.args.size),
+        )
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
