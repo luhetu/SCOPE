@@ -295,7 +295,7 @@ class DetectionTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(_value_or_default(getattr(args, "workers_per_gpu", None), 4)),
             train=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_train2017.json", img_prefix=f"{args.data_dir}/train2017/", pipeline=train_pipeline),
             val=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),
             test=dict(type="CocoDataset", ann_file=f"{args.data_dir}/annotations/instances_val2017.json", img_prefix=f"{args.data_dir}/val2017/", pipeline=test_pipeline),

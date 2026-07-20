@@ -236,7 +236,7 @@ DEFAULT_ARGS: Dict[str, Any] = {
     "depths": [2, 2, 6, 2],
     "num_heads": [3, 6, 12, 24],
     "window_size": 7,
-    "workers_per_gpu": 0,
+    "workers_per_gpu": None,
     "final_eval": False,
 }
 
@@ -252,6 +252,41 @@ def _load_args(config_path: str) -> SimpleNamespace:
     for key, value in raw_cfg.items():
         values[key] = _coerce_value(key, value)
     return SimpleNamespace(**values)
+
+
+def _validate_cli_overrides(config_path: str) -> None:
+    from utils.cfg import load_cfg
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cfg", default="")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--data_dir", default=None)
+    parser.add_argument("--workers_per_gpu", type=int, default=None)
+    expected = {
+        "model": "cli-model",
+        "data_dir": "/tmp/scope-cli-data",
+        "workers_per_gpu": 2,
+    }
+    original_argv = sys.argv
+    try:
+        sys.argv = [
+            "validate_seg_det.py",
+            "--cfg",
+            config_path,
+            "--model",
+            expected["model"],
+            "--data_dir",
+            expected["data_dir"],
+            "--workers_per_gpu",
+            str(expected["workers_per_gpu"]),
+        ]
+        args = load_cfg(parser)
+    finally:
+        sys.argv = original_argv
+    actual = {key: getattr(args, key) for key in expected}
+    if actual != expected:
+        raise AssertionError(f"CLI overrides were not preserved: {actual}, expected {expected}")
+    print("OK config loader CLI overrides")
 
 
 def _assert_config(task: str, path: str, cfg: Config) -> None:
@@ -361,6 +396,7 @@ def main() -> int:
             _install_torch_stub()
         _install_backbone_stub()
 
+    _validate_cli_overrides(seg_paths[0])
     seg_count = _validate_segmentation(seg_paths)
     det_count = _validate_detection(det_paths)
     print(f"Validated {seg_count} segmentation configs and {det_count} detection configs.")
