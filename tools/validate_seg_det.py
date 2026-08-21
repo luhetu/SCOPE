@@ -254,23 +254,39 @@ def _load_args(config_path: str) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def _validate_cli_overrides(config_path: str) -> None:
+def _make_train_parser() -> argparse.ArgumentParser:
+    """Match train.py argparse defaults, including workers_per_gpu=None."""
+    parser = argparse.ArgumentParser(description="Unified ViT/CoPE/SCoPE Trainer")
+    parser.add_argument("--cfg", type=str, default="")
+    parser.add_argument("--resume", type=str, default="")
+    parser.add_argument("--workers_per_gpu", type=int, default=None)
+    parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--data_dir", type=str, default=None)
+    parser.add_argument("--time_profile", action="store_true")
+    parser.add_argument("--time_profile_interval", type=int, default=1000)
+    return parser
+
+
+def _load_cfg_with_argv(argv: List[str]):
     from utils.cfg import load_cfg
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--cfg", default="")
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--data_dir", default=None)
-    parser.add_argument("--workers_per_gpu", type=int, default=None)
+    original_argv = sys.argv
+    try:
+        sys.argv = argv
+        return load_cfg(_make_train_parser())
+    finally:
+        sys.argv = original_argv
+
+
+def _validate_cli_overrides(config_path: str) -> None:
     expected = {
         "model": "cli-model",
         "data_dir": "/tmp/scope-cli-data",
         "workers_per_gpu": 2,
     }
-    original_argv = sys.argv
-    try:
-        sys.argv = [
-            "validate_seg_det.py",
+    args = _load_cfg_with_argv(
+        [
+            "train.py",
             "--cfg",
             config_path,
             "--model",
@@ -280,13 +296,45 @@ def _validate_cli_overrides(config_path: str) -> None:
             "--workers_per_gpu",
             str(expected["workers_per_gpu"]),
         ]
-        args = load_cfg(parser)
-    finally:
-        sys.argv = original_argv
+    )
     actual = {key: getattr(args, key) for key in expected}
     if actual != expected:
         raise AssertionError(f"CLI overrides were not preserved: {actual}, expected {expected}")
     print("OK config loader CLI overrides")
+
+
+def _validate_real_parser_builds(seg_paths: Iterable[str], det_paths: Iterable[str]) -> int:
+    """Build every config through train.py's real parser + load_cfg path."""
+    from tasks.detection import DetectionTask
+    from tasks.segmentation import SegmentationTask
+
+    count = 0
+    for task_name, paths, builder_cls, build_method, expected_type in (
+        ("seg", seg_paths, SegmentationTask, "_build_mmseg_config", "EncoderDecoder"),
+        ("det", det_paths, DetectionTask, "_build_mmdet_config", "MaskRCNN"),
+    ):
+        for path in paths:
+            args = _load_cfg_with_argv(["train.py", "--cfg", path])
+            if args.task != task_name:
+                raise AssertionError(f"{path}: expected task={task_name}, got {args.task!r}")
+            if getattr(args, "workers_per_gpu", "missing") is not None:
+                raise AssertionError(
+                    f"{path}: expected train.py default workers_per_gpu=None, got {args.workers_per_gpu!r}"
+                )
+            task = object.__new__(builder_cls)
+            task.args = args
+            task.run_name = task._build_run_name()
+            cfg = getattr(task, build_method)()
+            _assert_config(task_name, path, cfg)
+            if cfg.data["workers_per_gpu"] != 4:
+                raise AssertionError(
+                    f"{path}: expected workers_per_gpu fallback 4, got {cfg.data['workers_per_gpu']!r}"
+                )
+            if cfg.model["type"] != expected_type:
+                raise AssertionError(f"{path}: expected {expected_type}, got {cfg.model['type']}")
+            print(f"OK real-parser {task_name} config: {os.path.relpath(path, REPO_ROOT)}")
+            count += 1
+    return count
 
 
 def _assert_config(task: str, path: str, cfg: Config) -> None:
@@ -399,7 +447,11 @@ def main() -> int:
     _validate_cli_overrides(seg_paths[0])
     seg_count = _validate_segmentation(seg_paths)
     det_count = _validate_detection(det_paths)
-    print(f"Validated {seg_count} segmentation configs and {det_count} detection configs.")
+    parser_count = _validate_real_parser_builds(seg_paths, det_paths)
+    print(
+        f"Validated {seg_count} segmentation configs, {det_count} detection configs, "
+        f"and {parser_count} real-parser builds."
+    )
 
     if args.skip_backbone:
         print("Skipped backbone smoke tests by request.")
