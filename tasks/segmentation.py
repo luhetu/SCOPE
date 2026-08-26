@@ -51,6 +51,22 @@ def _as_pair(value, default):
     return (int(value), int(value))
 
 
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("1", "true", "yes", "y", "on"):
+            return True
+        if normalized in ("0", "false", "no", "n", "off"):
+            return False
+    return bool(value)
+
+
+def _value_or_default(value, default):
+    return default if value is None else value
+
+
 class SegmentationTask:
     def __init__(self, args):
         self.args = args
@@ -112,7 +128,7 @@ class SegmentationTask:
         )
         cfg.optimizer_config = dict(grad_clip=None)
 
-        if bool(getattr(args, "amp", False)):
+        if _as_bool(getattr(args, "amp", False)):
             cfg.fp16 = dict(loss_scale="dynamic")
             print("✅ MMSeg fp16 enabled: cfg.fp16 = dynamic loss scale")
 
@@ -121,7 +137,7 @@ class SegmentationTask:
             max_iters = int(getattr(args, "n_epochs", 32) * 1000)
         warmup_iters = getattr(args, "warmup_iters", None)
         if warmup_iters is None:
-            warmup_iters = int(getattr(args, "warmup_epochs", 0) * 1000)
+            warmup_iters = int((getattr(args, "warmup_epochs", 0) or 0) * 1000)
 
         cfg.runner = dict(type="IterBasedRunner", max_iters=max_iters)
         cfg.lr_config = dict(
@@ -204,15 +220,15 @@ class SegmentationTask:
 
     def _get_upernet_config(self):
         in_channels = self._get_backbone_out_channels()
-        head_dim = int(getattr(self.args, "seg_head_dim", self._get_default_seg_head_dim()))
-        aux_dim = int(getattr(self.args, "seg_aux_dim", self._get_default_seg_head_dim()))
-        aux_idx = int(getattr(self.args, "seg_aux_in_index", 2))
+        head_dim = int(_value_or_default(getattr(self.args, "seg_head_dim", None), self._get_default_seg_head_dim()))
+        aux_dim = int(_value_or_default(getattr(self.args, "seg_aux_dim", None), self._get_default_seg_head_dim()))
+        aux_idx = int(_value_or_default(getattr(self.args, "seg_aux_in_index", None), 2))
         norm_cfg = self._get_seg_norm_cfg()
 
         neck_cfg = None
         seg_neck_style = str(getattr(self.args, "seg_neck_style", "xcit_fpn")).lower()
         if self.args.model != "swin" and seg_neck_style in ("multilevel", "external"):
-            neck_dim = int(getattr(self.args, "seg_neck_dim", in_channels[0]))
+            neck_dim = int(_value_or_default(getattr(self.args, "seg_neck_dim", None), in_channels[0]))
             neck_cfg = dict(type="MultiLevelNeck", in_channels=in_channels, out_channels=neck_dim, scales=[4, 2, 1, 0.5])
             in_channels = [neck_dim] * 4
 
@@ -261,7 +277,10 @@ class SegmentationTask:
         return dict(type=norm_type, requires_grad=True)
 
     def _get_backbone_image_size(self):
-        value = getattr(self.args, "backbone_size", getattr(self.args, "crop_size", self.args.size))
+        value = _value_or_default(
+            getattr(self.args, "backbone_size", None),
+            _value_or_default(getattr(self.args, "crop_size", None), self.args.size),
+        )
         return tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else int(value)
 
     def _get_backbone_config(self):
@@ -299,9 +318,9 @@ class SegmentationTask:
         if args.model == "vit":
             return dict(type="ViTBackbone", **common)
         if args.model == "vitcope":
-            return dict(type="ViTCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", False)), **common)
+            return dict(type="ViTCoPEBackbone", use_cls_token=_as_bool(_value_or_default(getattr(args, "use_cls_token", None), False)), **common)
         if args.model == "vitscope":
-            return dict(type="ViTSCoPEBackbone", use_cls_token=bool(getattr(args, "use_cls_token", True)), **common)
+            return dict(type="ViTSCoPEBackbone", use_cls_token=_as_bool(_value_or_default(getattr(args, "use_cls_token", None), True)), **common)
         raise ValueError(f"Unknown segmentation backbone model: {args.model}")
 
     def _get_vit_fpn_adapter_style(self):
@@ -354,7 +373,7 @@ class SegmentationTask:
         ]
         return dict(
             samples_per_gpu=args.bs,
-            workers_per_gpu=int(getattr(args, "workers_per_gpu", 4)),
+            workers_per_gpu=int(_value_or_default(getattr(args, "workers_per_gpu", None), 4)),
             train=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/training", ann_dir="annotations/training", pipeline=train_pipeline),
             val=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
             test=dict(type="ADE20KDataset", data_root=args.data_dir, img_dir="images/validation", ann_dir="annotations/validation", pipeline=test_pipeline),
