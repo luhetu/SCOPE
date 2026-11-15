@@ -155,7 +155,7 @@ def main():
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
+        elif hasattr(args, 'warmup_epochs') and (args.warmup_epochs or 0) > 0:
             args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 1500  # Default warmup
@@ -188,7 +188,7 @@ def main():
         # Prefer explicit warmup_iters; otherwise convert warmup_epochs.
         if hasattr(args, 'warmup_iters') and args.warmup_iters is not None:
             args.warmup_iters = int(args.warmup_iters)
-        elif hasattr(args, 'warmup_epochs') and args.warmup_epochs > 0:
+        elif hasattr(args, 'warmup_epochs') and (args.warmup_epochs or 0) > 0:
             args.warmup_iters = int(args.warmup_epochs * iters_per_epoch)
         else:
             args.warmup_iters = 500  # Default warmup
